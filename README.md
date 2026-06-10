@@ -3,7 +3,7 @@
 > B 站 AI 字幕下载工具 — Claude Code Skill
 >
 > 单视频 / UP 主空间 / 收藏夹三种模式批量提取字幕，自动保存为 SRT 格式。
-> **🆕 v1.2 下载字幕后自动抓取视频元数据（播放量 / 标题 / 简介 / 点赞量 / 上传时间）并写入字幕顶端 frontmatter。**
+> **🆕 v1.3 仓库自带 `extract_meta.py`（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量 / 标题 / 简介 / 点赞量 / 上传时间）并写入字幕顶端 frontmatter。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
@@ -15,7 +15,8 @@
 - 🎯 **三种模式**：单视频字幕 / UP 主空间批量 / 收藏夹批量
 - 🪝 **JS Hook 拦截**：与 B 站浏览器扩展相同的 XHR/Fetch Hook 技术，稳定可靠
 - 📁 **自动保存到 SRT 格式**（`.md` 扩展名，与项目约定一致）
-- 🆕 **v1.2 元数据自动拼入**：下载字幕后自动抓取 6 字段元数据（标题 / UP 主 / 播放量 / 点赞数 / 简介 / 上传时间）作为 YAML frontmatter 写到字幕文件顶端
+- 🆕 **v1.3 零依赖元数据**：仓库自带 `extract_meta.py`（vendor 自 [bilibili-video-meta](https://github.com/xue1long/bilibili-video-meta) v1.2），无需安装额外 skill
+- 🆕 **v1.3 自动拼入 frontmatter**：下载字幕后自动抓取 6 字段元数据（标题 / UP 主 / 播放量 / 点赞数 / 简介 / 上传时间）作为 YAML frontmatter 写到字幕文件顶端
 - 🔁 **幂等写入**：重复执行不会重复堆叠 frontmatter
 - 🛡 **容错设计**：元数据抓取失败不影响字幕主流程
 
@@ -49,17 +50,11 @@
 pip install selenium webdriver-manager
 ```
 
-### 🆕 v1.2 额外依赖
+### 🆕 v1.3 元数据功能
 
-v1.2 新增的"自动拼元数据 frontmatter"功能需要 **[`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta)** 作为兄弟 skill。请把 `bilibili-video-meta` 安装到 `../bilibili-video-meta/` 相对位置（与本 skill 同级的 `skills/` 目录下），或在调用时使用 `--no-meta` 关闭此功能。
+v1.3 起，元数据抓取脚本 **`extract_meta.py` 已 vendor 进本仓库**（`scripts/extract_meta.py`），**无需任何外部 skill 依赖**。
 
-目录结构示例：
-
-```
-.claude/skills/
-├── bilibili-subtitle-fetch/    # 本 skill
-└── bilibili-video-meta/         # 必需（v1.2 起）
-```
+如果你的环境中也已安装 [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) 兄弟 skill，字幕下载会优先使用 bundled 副本（v1.3），不会影响独立使用 `bilibili-video-meta` 做其他事情。
 
 ---
 
@@ -105,7 +100,7 @@ python scripts/subtitle_extractor.py BV1xxxxxxxxxx --output /path/to/output/
 
 文件保存到 `00_Raw/01_B站视频转录/{BV号}.md`（默认路径，可用 `--output` 覆盖）：
 
-### 🆕 v1.2+ 输出示例
+### 🆕 v1.3+ 输出示例
 
 ```markdown
 ---
@@ -144,7 +139,7 @@ description: |
 | `description` | `videoData.desc` | 视频简介（含换行） |
 | `video_published_at` | `videoData.pubdate` | 发布日期（YYYY-MM-DD） |
 
-数据来自兄弟 skill [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta)，无需登录、抓取稳定。
+元数据来自 bundled 的 `extract_meta.py`（vendor 自 [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) v1.2），无需登录、抓取稳定。
 
 ---
 
@@ -179,8 +174,33 @@ pip install selenium webdriver-manager
 
 ## 相关项目
 
-- [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) — 视频元数据抓取（本 skill v1.2+ 的依赖）
+- [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) — 视频元数据独立 skill（v1.3 起核心代码已 vendor 进本仓库；如需独立抓元数据，可单独安装）
 - [video-wiki-compile](https://github.com/) — 视频笔记 Wiki 编译流水线
+
+---
+
+## 文件结构
+
+```
+bilibili-subtitle-fetch/
+├── SKILL.md                       # Claude Code skill 描述
+├── README.md                      # 本文件
+├── LICENSE                        # MIT
+├── .gitignore
+└── scripts/
+    ├── subtitle_extractor.py      # 主脚本（Selenium + JS Hook 抓字幕）
+    ├── extract_meta.py            # 🆕 v1.3 vendor：抓视频元数据（自 bilibili-video-meta v1.2）
+    └── prepend_meta.py            # 🆕 v1.2：把元数据拼成 frontmatter 写到字幕顶端
+```
+
+---
+
+## 版本历史
+
+- **v1.3** (2026-06-10) — Vendor `extract_meta.py`，零外部依赖
+- **v1.2** (2026-06-10) — 新增"下载字幕后自动拼元数据 frontmatter"功能
+- **v1.1** — 移除对 karpathy `videos.db` 的依赖，改用项目自有 `compile_db.json`
+- **v1.0** — 初始发布：单视频 / UP 主空间 / 收藏夹三种模式
 
 ---
 
@@ -193,4 +213,4 @@ MIT — 详见 [LICENSE](LICENSE) 文件。
 ## 致谢
 
 - B 站浏览器扩展的 XHR/Fetch Hook 思路
-- [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) 的元数据抓取能力
+- [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) 的元数据抓取能力（v1.3 起核心代码 vendor 自该项目）

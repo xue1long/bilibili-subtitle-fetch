@@ -1,6 +1,6 @@
 ---
 name: bilibili-subtitle-fetch
-description: B站AI字幕下载工具，支持单视频、UP主空间、收藏夹三种模式提取字幕。使用JS Hook拦截技术（与B站浏览器扩展相同），自动保存为SRT文件。**🆕 v1.2 下载字幕后自动抓取视频元数据（播放量/标题/简介/点赞量/上传时间）并写入字幕顶端 frontmatter，无需二次调用。** 当用户说"下载字幕"、"提取字幕"、"导出字幕"、"AI字幕"、"BV号字幕"时触发。收藏夹模式需先运行 update-bilibili-favorites 更新视频列表。
+description: B站AI字幕下载工具，支持单视频、UP主空间、收藏夹三种模式提取字幕。使用JS Hook拦截技术（与B站浏览器扩展相同），自动保存为SRT文件。**🆕 v1.3 仓库自带 extract_meta.py（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量/标题/简介/点赞量/上传时间）并写入字幕顶端 frontmatter。** 当用户说"下载字幕"、"提取字幕"、"导出字幕"、"AI字幕"、"BV号字幕"时触发。收藏夹模式需先运行 update-bilibili-favorites 更新视频列表。
 context: fork
 agent: general-purpose
 ---
@@ -128,6 +128,8 @@ description: |
 
 **实现细节**：
 
+- **v1.3 零依赖**：元数据抓取脚本 `extract_meta.py` 已 vendor 进本仓库（`scripts/extract_meta.py`），无需安装任何外部 skill
+- **路径查找顺序**：bundled (`scripts/extract_meta.py`) 优先 → 外部 (`../bilibili-video-meta/scripts/extract_meta.py`) 回退 → 都找不到则跳过
 - **best-effort enrichment**：元数据抓取失败时字幕下载主流程不受影响（只 print 警告，不抛错）
 - **幂等写入**：若字幕文件已有 frontmatter，先剥离再插入；可重复执行不重复堆叠
 - **原子写**：通过 `.tmp` 文件 + rename 写入，写失败时原文件保持原样

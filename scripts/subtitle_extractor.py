@@ -288,25 +288,43 @@ class SubtitleExtractor:
             print(f"  [wiki DB] 更新失败: {e}")
 
     def _enrich_with_meta(self, subtitle_path: Path, bvid: str) -> None:
-        """🆕 v1.2 调用 bilibili-video-meta 抓取元数据并拼到字幕顶端
+        """🆕 v1.3 调用 extract_meta 抓取元数据并拼到字幕顶端
 
         通过 subprocess 调用两个独立脚本：
-          1. .claude/skills/bilibili-video-meta/scripts/extract_meta.py → JSON
-          2. .claude/skills/bilibili-subtitle-fetch/scripts/prepend_meta.py → frontmatter
+          1. extract_meta.py → JSON（优先 bundled，回退外部）
+          2. prepend_meta.py → frontmatter（同目录 bundled）
+
+        路径查找顺序（v1.3 vendor 策略）：
+          1. bundled: scripts/extract_meta.py（v1.3+ 仓库自带，独立可运行）
+          2. 外部:   ../bilibili-video-meta/scripts/extract_meta.py（旧版兼容）
 
         容错：元数据抓取失败不影响字幕下载主流程（best-effort enrichment）。
         """
-        # 计算 skills 根目录（与 SUBTITLE_DIR 类似的 5 层相对路径）
+        # 1. bundled 路径（vendor 副本，v1.3+ 默认）
+        bundled_extract = Path(__file__).parent / "extract_meta.py"
+        # 2. 外部路径（兼容老版本 vault 结构）
         skills_root = Path(__file__).parent.parent.parent.parent  # scripts/ → skill/ → skills/ → .claude/ → vault
-        extract_meta_script = skills_root / "bilibili-video-meta" / "scripts" / "extract_meta.py"
-        prepend_meta_script = Path(__file__).parent / "prepend_meta.py"
+        external_extract = skills_root / "bilibili-video-meta" / "scripts" / "extract_meta.py"
 
-        if not extract_meta_script.exists():
-            print(f"  [meta] 跳过：找不到 {extract_meta_script}", file=sys.stderr)
+        if bundled_extract.exists():
+            extract_meta_script = bundled_extract
+            meta_source = "bundled"
+        elif external_extract.exists():
+            extract_meta_script = external_extract
+            meta_source = "external (../bilibili-video-meta/)"
+        else:
+            print(
+                f"  [meta] 跳过：找不到 extract_meta.py（bundled 或 ../bilibili-video-meta/）",
+                file=sys.stderr,
+            )
             return
+
+        prepend_meta_script = Path(__file__).parent / "prepend_meta.py"
         if not prepend_meta_script.exists():
             print(f"  [meta] 跳过：找不到 {prepend_meta_script}", file=sys.stderr)
             return
+
+        print(f"  [meta] 来源: {meta_source}")
 
         try:
             print(f"  [meta] 抓取元数据 → {bvid}")
