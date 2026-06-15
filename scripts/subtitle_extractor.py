@@ -14,7 +14,7 @@ from typing import Optional
 
 # 字幕输出目录（默认存到 00_Raw/01_B站视频转录/，与现有 .txt 转录稿同目录）
 # scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
-SUBTITLE_DIR = Path(__file__).parent.parent.parent.parent.parent / "00_Raw" / "01_B站视频转录"
+SUBTITLE_DIR = Path(__file__).parent.parent.parent.parent.parent / "10_Raw" / "01_B站视频转录"
 
 # 本项目 wiki DB 路径（compile_db.json，video-wiki-compile 维护）
 # scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
@@ -23,6 +23,9 @@ COMPILE_DB_PATH = Path(__file__).parent.parent.parent.parent.parent / "scripts" 
 # 🆕 首次配置：字幕保存路径配置文件
 # scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+
+# 下载列表文件名
+DOWNLOAD_LIST_FILENAME = "download_list.json"
 
 
 SUPPORTED_BROWSERS = ["edge", "chrome"]
@@ -74,9 +77,8 @@ class SubtitleExtractor:
         self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cookies_path = cookies_path
-        # 🆕 本项目 wiki DB（compile_db.json）：命中则跳过下载
+        # 本项目 wiki DB 路径（compile_db.json，video-wiki-compile 维护）
         self.compile_db_path = Path(compile_db_path) if compile_db_path else COMPILE_DB_PATH
-        self._compile_db_ids = None  # 懒加载
         # 🆕 v1.2 字幕保存后是否自动拼元数据 frontmatter（默认 True；--no-meta 关闭）
         self.enrich_with_meta = enrich_with_meta
         # 🆕 浏览器选择（默认 chrome；支持 edge / chrome）
@@ -84,24 +86,89 @@ class SubtitleExtractor:
         if self.browser not in SUPPORTED_BROWSERS:
             raise ValueError(f"不支持的浏览器: {browser}，仅支持: {SUPPORTED_BROWSERS}")
 
-    def _load_compile_db_ids(self) -> set:
-        """懒加载：compile_db.json 里所有已记录的 ID（id 字段）"""
-        if self._compile_db_ids is not None:
-            return self._compile_db_ids
-        self._compile_db_ids = set()
-        if not self.compile_db_path or not self.compile_db_path.exists():
-            return self._compile_db_ids
+        # 下载列表（去重机制）
+        self._download_list = None
+        self._init_download_list()
+
+    # ─── 下载列表方法 ───────────────────────────────────────────────
+
+    def _init_download_list(self):
+        """初始化下载列表：已存在则加载，不存在则扫描 output_dir 现有文件后创建"""
+        list_path = self.output_dir / DOWNLOAD_LIST_FILENAME
+        if list_path.exists():
+            self._download_list = self._load_download_list(list_path)
+        else:
+            self._download_list = self._create_download_list()
+            self._scan_existing_files()
+            self._save_download_list(list_path)
+
+    def _get_download_list_path(self) -> Path:
+        return self.output_dir / DOWNLOAD_LIST_FILENAME
+
+    def _create_download_list(self) -> dict:
+        """创建空的下载列表结构"""
+        return {
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "updated_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "records": {}
+        }
+
+    def _load_download_list(self, list_path: Path) -> dict:
+        """从文件加载下载列表"""
         try:
-            with open(self.compile_db_path, encoding='utf-8') as f:
+            with open(list_path, encoding="utf-8") as f:
                 data = json.load(f)
-            for r in data.get('records', []):
-                vid = r.get('id')
-                if vid:
-                    self._compile_db_ids.add(vid)
-            print(f"  [wiki DB] 已加载 {len(self._compile_db_ids)} 条 ID 记录: {self.compile_db_path.name}")
+            print(f"  [下载列表] 已加载 {len(data.get('records', {}))} 条记录: {list_path.name}")
+            return data
         except Exception as e:
-            print(f"  [警告] 读取 compile_db.json 失败: {e}")
-        return self._compile_db_ids
+            print(f"  [下载列表] 加载失败: {e}，将重新创建")
+            return self._create_download_list()
+
+    def _save_download_list(self, list_path: Path):
+        """保存下载列表到文件"""
+        self._download_list["updated_at"] = time.strftime("%Y-%m-%dT%H:%M:%S")
+        try:
+            with open(list_path, "w", encoding="utf-8") as f:
+                json.dump(self._download_list, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print(f"  [下载列表] 保存失败: {e}")
+
+    def _scan_existing_files(self):
+        """扫描 output_dir 下所有 .md 文件，提取 BV 号，生成初始记录"""
+        print(f"  [下载列表] 扫描现有文件: {self.output_dir}")
+        count = 0
+        for f in self.output_dir.glob("*.md"):
+            # 从文件名提取 BV 号
+            name = f.stem  # e.g. "BV11RffBdEEQ"
+            if name.startswith("BV"):
+                self._download_list["records"][name] = {
+                    "status": "success",
+                    "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                    "subtitle_path": str(f),
+                    "source": "scan_existing"
+                }
+                count += 1
+        if count > 0:
+            print(f"  [下载列表] 从磁盘扫描到 {count} 个已有字幕文件")
+
+    def _is_already_success(self, bvid: str) -> bool:
+        """检查 BV 号是否已在列表中标记为 success"""
+        record = self._download_list.get("records", {}).get(bvid)
+        return record is not None and record.get("status") == "success"
+
+    def _update_download_list(self, bvid: str, status: str, subtitle_path: str = None, error: str = None):
+        """更新下载列表中某条记录"""
+        record = {
+            "status": status,
+            "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        if subtitle_path:
+            record["subtitle_path"] = subtitle_path
+        if error:
+            record["error"] = error
+
+        self._download_list.setdefault("records", {})[bvid] = record
+        self._save_download_list(self._get_download_list_path())
 
     def to_srt_time(self, sec: float) -> str:
         """将秒数转换为 SRT 时间格式"""
@@ -134,21 +201,6 @@ class SubtitleExtractor:
         print(f"  [保存] {idx - 1} 条字幕 -> {display_name}")
         return True
 
-    def is_subtitle_exists(self, bv_id: str) -> bool:
-        """检查是否应跳过此视频（2 个来源：磁盘 / 本项目 wiki DB）"""
-        return self.get_skip_reason(bv_id) is not None
-
-    def get_skip_reason(self, bv_id: str) -> Optional[str]:
-        """返回跳过原因（用于日志），None = 不跳过"""
-        # 1. 磁盘上 .md 已存在
-        subtitle_path = self.output_dir / f"{bv_id}.md"
-        if subtitle_path.exists():
-            return f"磁盘已存在 {subtitle_path.name}"
-        # 2. 本项目 wiki DB (compile_db.json) 已有此 ID
-        if bv_id in self._load_compile_db_ids():
-            return f"wiki DB 已有此 ID（compile_db.json）"
-        return None
-
     def extract_single(self, bvid: str, retry: bool = True) -> Optional[str]:
         """提取单个视频的AI字幕
 
@@ -159,10 +211,9 @@ class SubtitleExtractor:
         Returns:
             字幕文件路径，失败返回 None
         """
-        # 检查是否应跳过（磁盘 / wiki DB 两个来源）
-        reason = self.get_skip_reason(bvid)
-        if reason:
-            print(f"  [跳过] {bvid} - {reason}")
+        # 检查下载列表：已成功下载则跳过
+        if self._is_already_success(bvid):
+            print(f"  [跳过] {bvid} - 下载列表中已存在")
             return "SKIPPED"
 
         print(f"  [提取] {bvid}")
@@ -303,9 +354,13 @@ class SubtitleExtractor:
                     # 🆕 v1.2 拼元数据 frontmatter（best-effort，不阻塞主流程）
                     if self.enrich_with_meta:
                         self._enrich_with_meta(output_path, bvid)
+                    # 更新下载列表
+                    self._update_download_list(bvid, "success", str(output_path))
                     return str(output_path)
             else:
                 print(f"  [警告] 未捕获到字幕 (url={bool(url)}, data={bool(data)})")
+                # 更新下载列表（失败）
+                self._update_download_list(bvid, "failed", error="未捕获到字幕")
                 if retry:
                     print("  [重试] 第一次失败，重新尝试...")
                     time.sleep(3)
@@ -315,6 +370,8 @@ class SubtitleExtractor:
 
         except Exception as e:
             print(f"  [错误] 提取失败: {e}")
+            # 更新下载列表（失败）
+            self._update_download_list(bvid, "failed", error=str(e))
             if retry:
                 print("  [重试] 出错重试...")
                 time.sleep(3)
@@ -488,13 +545,11 @@ class SubtitleExtractor:
                 continue
             print(f"  [{i+1}/{len(entries)}] 处理 {bv_id}")
             subtitle_path = self.extract_single(bv_id)
-            is_skipped = subtitle_path == "SKIPPED"
             results.append({
                 'bv_id': bv_id,
                 'title': entry.get('title', ''),
-                'subtitle_path': None if is_skipped else subtitle_path,
+                'subtitle_path': subtitle_path,
                 'success': subtitle_path not in (None, "SKIPPED"),
-                'skipped': is_skipped,
             })
             time.sleep(2)  # 避免请求过快
 
@@ -535,13 +590,11 @@ class SubtitleExtractor:
                 continue
             print(f"  [{i+1}/{len(videos)}] {bv_id} - {title[:30]}...")
             subtitle_path = self.extract_single(bv_id)
-            is_skipped = subtitle_path == "SKIPPED"
             results.append({
                 'bv_id': bv_id,
                 'title': title,
-                'subtitle_path': None if is_skipped else subtitle_path,
+                'subtitle_path': subtitle_path,
                 'success': subtitle_path not in (None, "SKIPPED"),
-                'skipped': is_skipped,
             })
             time.sleep(2)  # 避免请求过快
 
@@ -623,7 +676,7 @@ def main():
 
         result = extractor.extract_single(bvid)
         if result == "SKIPPED":
-            print("\n跳过: 已在 DB 或磁盘中存在")
+            print("\n跳过: 下载列表中已存在")
             sys.exit(0)
         elif result:
             print(f"\n成功: {result}")

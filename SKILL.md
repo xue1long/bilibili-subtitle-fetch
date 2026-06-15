@@ -1,6 +1,6 @@
 ---
 name: bilibili-subtitle-fetch
-description: B站AI字幕下载工具，支持单视频、UP主空间、收藏夹三种模式提取字幕。使用JS Hook拦截技术（与B站浏览器扩展相同），自动保存为SRT文件。**🆕 v1.3 仓库自带 extract_meta.py（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量/标题/简介/点赞量/上传时间）并写入字幕顶端 frontmatter。** 当用户说"下载字幕"、"提取字幕"、"导出字幕"、"AI字幕"、"BV号字幕"时触发。收藏夹模式需先运行 update-bilibili-favorites 更新视频列表。
+description: B站AI字幕下载工具，支持单视频、UP主空间、收藏夹三种模式提取字幕。使用JS Hook拦截技术（与B站浏览器扩展相同），自动保存为SRT文件。**🆕 v1.4 下载列表去重**：download_list.json 跟踪下载状态，成功/失败全程记录。**🆕 v1.3 仓库自带 extract_meta.py（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量/标题/简介/点赞量/上传时间）并写入字幕顶端 frontmatter。** 当用户说"下载字幕"、"提取字幕"、"导出字幕"、"AI字幕"、"BV号字幕"时触发。收藏夹模式需先运行 update-bilibili-favorites 更新视频列表。
 context: fork
 agent: general-purpose
 ---
@@ -151,23 +151,45 @@ python .claude/skills/bilibili-subtitle-fetch/scripts/subtitle_extractor.py BV1x
 | `subtitle_downloaded_at` | 下载完成时间（v1.1 新增） |
 | `id` 已存在但 record 缺失 | 跳过更新，让 wiki compile 流程处理 |
 
-## 跳过逻辑（去重）
+## 下载列表去重机制（v1.4 新增）
 
-每次提取前会**两层去重**检查，命中任意一层即跳过下载：
+使用 `download_list.json` 实现下载状态跟踪，避免重复下载。
 
-| 层级 | 数据源 | 命中条件 |
-|------|--------|----------|
-| 1 | 磁盘 | `000_Raw/01_B站视频转录/{BV号}.md` 已存在 |
-| 2 | **wiki DB** | `scripts/compile_db.json` 的 `records[].id` 已包含此 BV 号（无论 status 是 done/pending/invalid） |
+**列表文件**：`{output_dir}/download_list.json`
 
-第 2 层是本项目 video-wiki-compile 的去重闸门：BV 号已在 wiki 数据库里 → 不再重复下载（因为视频已经入过流水线）。
-
-> **🆕 v1.1 更新**：videos.db 依赖已移除。本 skill 不再依赖 karpathy 的 `bilibili-toolkit`；改用本项目自有的 `compile_db.json` 作为唯一信息源。
-
-日志示例：
+**结构**：
+```json
+{
+  "created_at": "2026-06-15T10:00:00",
+  "updated_at": "2026-06-15T12:30:00",
+  "records": {
+    "BV11RffBdEEQ": {
+      "status": "success",
+      "downloaded_at": "2026-06-15T10:05:00",
+      "subtitle_path": "10_Raw/01_B站视频转录/BV11RffBdEEQ.md"
+    },
+    "BV1SYES6BEPW": {
+      "status": "failed",
+      "downloaded_at": "2026-06-15T10:10:00",
+      "error": "未捕获到字幕"
+    }
+  }
+}
 ```
-[跳过] BV11RffBdEEQ - 磁盘已存在 BV11RffBdEEQ.md
-[跳过] BV11o4y1s7VY - wiki DB 已有此 ID（compile_db.json）
+
+**初始化流程**：
+1. 首次运行 → 扫描 `output_dir` 下所有 `.md` 文件，提取 BV 号，生成列表（status=success）
+2. 后续运行 → 加载已有列表
+
+**去重规则**：
+- 每次下载前检查列表：status=success 已存在则跳过
+- 下载成功后 → 更新列表 status=success + 时间 + 路径
+- 下载失败后 → 更新列表 status=failed + 时间 + error
+
+**日志示例**：
+```
+[下载列表] 已加载 5 条记录: download_list.json
+[跳过] BV11RffBdEEQ - 下载列表中已存在
 ```
 
 ## 核心脚本
