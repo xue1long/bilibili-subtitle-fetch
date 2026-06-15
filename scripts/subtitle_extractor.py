@@ -20,10 +20,58 @@ SUBTITLE_DIR = Path(__file__).parent.parent.parent.parent.parent / "00_Raw" / "0
 # scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
 COMPILE_DB_PATH = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "compile_db.json"
 
+# 🆕 首次配置：字幕保存路径配置文件
+# scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
+CONFIG_PATH = Path(__file__).parent.parent / "config.json"
+
+
+SUPPORTED_BROWSERS = ["edge", "chrome"]
+
+
+def _load_config() -> dict:
+    """加载配置文件，不存在或损坏返回空 dict"""
+    if not CONFIG_PATH.exists():
+        return {}
+    try:
+        with open(CONFIG_PATH, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_config(config: dict):
+    """保存配置文件"""
+    CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+    with open(CONFIG_PATH, "w", encoding="utf-8") as f:
+        json.dump(config, f, ensure_ascii=False, indent=2)
+
+
+def _first_run_config():
+    """首次配置：询问字幕保存路径，写入 config.json"""
+    print("=" * 50)
+    print("首次配置 B站字幕提取工具")
+    print("=" * 50)
+    print(f"\n默认保存路径：{SUBTITLE_DIR}")
+    custom = input("\n自定义保存路径（直接回车使用默认路径）: ").strip()
+    path = Path(custom) if custom else SUBTITLE_DIR
+    config = _load_config()
+    config["output_dir"] = str(path.resolve())
+    _save_config(config)
+    print(f"\n✅ 配置已保存：{path.resolve()}")
+    print("  后续下载将默认保存到此处")
+    print("  如需更改，可删除或修改：.claude/skills/bilibili-subtitle-fetch/config.json")
+    print("=" * 50)
+    return path
+
 
 class SubtitleExtractor:
-    def __init__(self, output_dir: Path = None, cookies_path: str = None, compile_db_path: str = None, enrich_with_meta: bool = True):
-        self.output_dir = output_dir or SUBTITLE_DIR
+    def __init__(self, output_dir: Path = None, cookies_path: str = None, compile_db_path: str = None, enrich_with_meta: bool = True, browser: str = "chrome"):
+        # 🆕 优先级：显式参数 > 配置文件 > SUBTITLE_DIR
+        if output_dir is None:
+            config = _load_config()
+            saved_dir = config.get("output_dir")
+            output_dir = Path(saved_dir) if saved_dir else SUBTITLE_DIR
+        self.output_dir = output_dir
         self.output_dir.mkdir(parents=True, exist_ok=True)
         self.cookies_path = cookies_path
         # 🆕 本项目 wiki DB（compile_db.json）：命中则跳过下载
@@ -31,6 +79,10 @@ class SubtitleExtractor:
         self._compile_db_ids = None  # 懒加载
         # 🆕 v1.2 字幕保存后是否自动拼元数据 frontmatter（默认 True；--no-meta 关闭）
         self.enrich_with_meta = enrich_with_meta
+        # 🆕 浏览器选择（默认 chrome；支持 edge / chrome）
+        self.browser = browser.lower()
+        if self.browser not in SUPPORTED_BROWSERS:
+            raise ValueError(f"不支持的浏览器: {browser}，仅支持: {SUPPORTED_BROWSERS}")
 
     def _load_compile_db_ids(self) -> set:
         """懒加载：compile_db.json 里所有已记录的 ID（id 字段）"""
@@ -116,24 +168,36 @@ class SubtitleExtractor:
         print(f"  [提取] {bvid}")
         video_url = f"https://www.bilibili.com/video/{bvid}"
 
-        # 关闭 Edge
-        print("  [浏览器] 关闭 Edge...")
-        subprocess.run('taskkill /F /IM msedge.exe 2>nul', shell=True)
+        # 关闭浏览器
+        browser_process_map = {
+            "edge": "msedge.exe",
+            "chrome": "chrome.exe",
+        }
+        proc_name = browser_process_map[self.browser]
+        print(f"  [浏览器] 关闭 {self.browser}...")
+        subprocess.run(f'taskkill /F /IM {proc_name} 2>nul', shell=True)
         time.sleep(2)
 
-        # 启动 Edge
-        user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
         from selenium import webdriver
-        from selenium.webdriver.edge.options import Options
-
-        options = Options()
-        options.add_argument(f"--user-data-dir={user_data_dir}")
-        options.add_argument("--profile-directory=Default")
 
         driver = None
         try:
-            print("  [浏览器] 启动 Edge...")
-            driver = webdriver.Edge(options=options)
+            if self.browser == "edge":
+                from selenium.webdriver.edge.options import Options
+                user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
+                options = Options()
+                options.add_argument(f"--user-data-dir={user_data_dir}")
+                options.add_argument("--profile-directory=Default")
+                print("  [浏览器] 启动 Edge...")
+                driver = webdriver.Edge(options=options)
+            elif self.browser == "chrome":
+                from selenium.webdriver.chrome.options import Options
+                user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
+                options = Options()
+                options.add_argument(f"--user-data-dir={user_data_dir}")
+                options.add_argument("--profile-directory=Default")
+                print("  [浏览器] 启动 Chrome...")
+                driver = webdriver.Chrome(options=options)
 
             print(f"  [页面] 打开: {video_url}")
             driver.get(video_url)
@@ -491,12 +555,39 @@ def main():
     parser.add_argument('--favorites', action='store_true', help='收藏夹模式')
     parser.add_argument('--output', '-o', metavar='DIR', default=None, help='输出目录')
     parser.add_argument('--no-meta', action='store_true', help='🆕 跳过字幕顶端拼元数据 frontmatter')
+    parser.add_argument('--browser', default=None, choices=['chrome', 'edge'],
+                        help='浏览器类型（默认 chrome，省略则交互选择）')
+    parser.add_argument('--reset-config', action='store_true', help='🆕 重置配置文件，重新引导首次配置')
 
     args = parser.parse_args()
+
+    # 🆕 重置配置
+    if args.reset_config:
+        if CONFIG_PATH.exists():
+            CONFIG_PATH.unlink()
+            print(f"已删除配置文件：{CONFIG_PATH}")
+        _first_run_config()
+        config = _load_config()
+    else:
+        config = _load_config()
+        # 🆕 首次配置检测（未指定 --output 且 config.json 无 output_dir 时触发）
+        if not args.output and not config.get("output_dir"):
+            _first_run_config()
+            config = _load_config()  # 重新加载以获取新保存的路径
+
+    # 交互选择浏览器（省略 --browser 时触发）
+    browser = args.browser
+    if browser is None:
+        print("请选择浏览器（已登录 B站 的那个）：")
+        print("  1) Chrome")
+        print("  2) Edge")
+        choice = input("输入选项 [1]: ").strip()
+        browser = "chrome" if choice in ("", "1") else "edge"
 
     extractor = SubtitleExtractor(
         output_dir=Path(args.output) if args.output else None,
         enrich_with_meta=not args.no_meta,
+        browser=browser,
     )
 
     # 模式判断
