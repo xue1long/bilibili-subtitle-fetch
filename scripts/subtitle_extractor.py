@@ -11,24 +11,79 @@ import subprocess
 import argparse
 from pathlib import Path
 from typing import Optional
+from runtime_paths import (
+    chrome_profile_dir,
+    compile_db_path,
+    default_output_dir,
+    edge_profile_dir,
+    favorites_path,
+)
+from bili_guard import (
+    CircuitBreaker,
+    FailureKind,
+    RateLimiter,
+    check_login_state,
+    classify_failure,
+    download_list_lock,
+    install_subtitle_probe,
+    normalize_subtitle_probe,
+    read_subtitle_probe,
+)
 
-# 字幕输出目录（默认存到 00_Raw/01_B站视频转录/，与现有 .txt 转录稿同目录）
-# scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
-SUBTITLE_DIR = Path(__file__).parent.parent.parent.parent.parent / "10_Raw" / "01_B站视频转录"
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
+# 字幕输出目录（默认存到项目根目录下的 10_raw/01_B站视频转录/）
+SUBTITLE_DIR = default_output_dir()
 
 # 本项目 wiki DB 路径（compile_db.json，video-wiki-compile 维护）
-# scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
-COMPILE_DB_PATH = Path(__file__).parent.parent.parent.parent.parent / "scripts" / "compile_db.json"
+COMPILE_DB_PATH = compile_db_path()
 
 # 🆕 首次配置：字幕保存路径配置文件
-# scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → vault_root (5 层)
 CONFIG_PATH = Path(__file__).parent.parent / "config.json"
 
 # 下载列表文件名
 DOWNLOAD_LIST_FILENAME = "download_list.json"
+PAGE_LOAD_TIMEOUT_SECONDS = 30
 
 
 SUPPORTED_BROWSERS = ["edge", "chrome"]
+
+
+def _subtitle_body_from_payload(payload):
+    body = payload.get("body") if isinstance(payload, dict) else None
+    if not isinstance(body, list) or not body:
+        return None
+    valid = [item for item in body if isinstance(item, dict) and "content" in item]
+    return valid or None
+
+
+def _click_subtitle_button(driver):
+    return driver.execute_script("""
+        const btn = document.querySelector('.bpx-player-ctrl-btn.bpx-player-ctrl-subtitle') ||
+                   document.querySelector('.bpx-player-ctrl-subtitle');
+        const probe = window.__subtitleProbe;
+        if (btn) {
+            probe.button_found = true;
+            btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+            probe.click_dispatched = true;
+            console.log('[SUB] Subtitle btn clicked');
+        }
+    """)
+
+
+def _select_subtitle_language(driver):
+    return driver.execute_script("""
+        const items = Array.from(document.querySelectorAll('.bpx-player-ctrl-subtitle-language-item-text'));
+        if (items && items.length > 0) {
+            const target = items[0];
+            console.log('[SUB] Clicking:', target.textContent.trim());
+            target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
+        } else {
+            console.log('[SUB] No language items');
+        }
+    """)
 
 
 def _load_config() -> dict:
@@ -62,13 +117,22 @@ def _first_run_config():
     _save_config(config)
     print(f"\n✅ 配置已保存：{path.resolve()}")
     print("  后续下载将默认保存到此处")
-    print("  如需更改，可删除或修改：.claude/skills/bilibili-subtitle-fetch/config.json")
+    print(f"  如需更改，可删除或修改：{CONFIG_PATH}")
     print("=" * 50)
     return path
 
 
 class SubtitleExtractor:
-    def __init__(self, output_dir: Path = None, cookies_path: str = None, compile_db_path: str = None, enrich_with_meta: bool = True, browser: str = "chrome"):
+    def __init__(self, output_dir: Path = None, cookies_path: str = None,
+                 compile_db_path: str = None, enrich_with_meta: bool = True,
+                 browser: str = "chrome", close_browser: bool = False,
+                 reuse_browser: bool = False,
+                 backend: str = None,
+                 asr_fallback: bool = False,
+                 asr_model: str = "small",
+                 min_delay: float = 8, max_delay: float = 15,
+                 rate_limit_threshold: int = 2,
+                 cooldown_seconds: int = 900):
         # 🆕 优先级：显式参数 > 配置文件 > SUBTITLE_DIR
         if output_dir is None:
             config = _load_config()
@@ -83,12 +147,111 @@ class SubtitleExtractor:
         self.enrich_with_meta = enrich_with_meta
         # 🆕 浏览器选择（默认 chrome；支持 edge / chrome）
         self.browser = browser.lower()
+        self.backend = (backend or os.environ.get("BILIBILI_BROWSER_BACKEND", "selenium")).lower()
+        self.asr_fallback = asr_fallback
+        self.asr_model = asr_model
+        self.close_browser = close_browser
+        self.reuse_browser = reuse_browser
+        self._driver = None
+        self._playwright_context = None
+        self.browser_start_count = 0
+        self.browser_restart_count = 0
         if self.browser not in SUPPORTED_BROWSERS:
             raise ValueError(f"不支持的浏览器: {browser}，仅支持: {SUPPORTED_BROWSERS}")
+
+        self.rate_limiter = RateLimiter(min_delay, max_delay)
+        self.breaker = CircuitBreaker(
+            self.output_dir / ".bili_guard_state.json",
+            threshold=rate_limit_threshold,
+            cooldown_seconds=cooldown_seconds,
+        )
+        self.last_failure_kind = None
+        self.last_failure_message = ""
+        self.last_probe = normalize_subtitle_probe()
+        self.last_duration_sec = 0.0
+        self._started_at = None
 
         # 下载列表（去重机制）
         self._download_list = None
         self._init_download_list()
+
+    def _close_driver(self):
+        driver, self._driver = self._driver, None
+        if driver:
+            try:
+                driver.quit()
+            except Exception as close_error:
+                print(f"  [警告] 关闭浏览器失败: {close_error}")
+
+    def close(self):
+        """关闭共享浏览器；重复调用安全。"""
+        self._close_driver()
+
+    async def _extract_single_playwright_async(self, bvid: str) -> Optional[str]:
+        profile = os.environ.get("BILIBILI_SFETCH_CHROME_PROFILE")
+        profile_dir = Path(profile) if profile else self.output_dir.parent.parent / ".chrome-bilibili"
+        from backends.playwright_subtitle import extract
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            result = await extract(
+                f"https://www.bilibili.com/video/{bvid}", profile_dir,
+                p.chromium.executable_path, PAGE_LOAD_TIMEOUT_SECONDS,
+            )
+        if result.status != "success":
+            raise RuntimeError(result.error or result.status)
+        output_path = self.output_dir / f"{bvid}.md"
+        if not self.save_srt(result.body, str(output_path)):
+            return None
+        if self.enrich_with_meta:
+            # Playwright backend closes its page before returning; use the
+            # bundled metadata extractor as a best-effort second request.
+            self._enrich_with_meta(output_path, bvid)
+        self._update_db_subtitle_path(bvid, str(output_path))
+        self._update_download_list(bvid, "success", str(output_path), duration_sec=round(time.monotonic() - self._started_at, 3))
+        self.breaker.reset()
+        return str(output_path)
+
+    def _extract_single_playwright(self, bvid: str) -> Optional[str]:
+        import asyncio
+        return asyncio.run(self._extract_single_playwright_async(bvid))
+
+    def _start_driver(self):
+        browser_process_map = {"edge": "msedge.exe", "chrome": "chrome.exe"}
+        if self.close_browser:
+            proc_name = browser_process_map[self.browser]
+            print(f"  [浏览器] 关闭 {self.browser}...")
+            subprocess.run(f'taskkill /F /IM {proc_name} 2>nul', shell=True)
+            time.sleep(2)
+
+        from selenium import webdriver
+        from selenium.webdriver.chrome.service import Service as ChromeService
+        self.browser_start_count += 1
+        if self.browser == "edge":
+            from selenium.webdriver.edge.options import Options
+            user_data_dir = edge_profile_dir()
+            options = Options()
+            options.add_argument(f"--user-data-dir={user_data_dir}")
+            options.add_argument("--profile-directory=Default")
+            print("  [浏览器] 启动 Edge...")
+            return webdriver.Edge(options=options)
+        from selenium.webdriver.chrome.options import Options
+        user_data_dir = chrome_profile_dir()
+        options = Options()
+        chrome_binary = os.environ.get("BILIBILI_CHROME_BINARY")
+        if chrome_binary and Path(chrome_binary).exists():
+            options.binary_location = chrome_binary
+        if os.environ.get("BILIBILI_HEADLESS") == "1":
+            options.add_argument("--headless=new")
+            options.add_argument("--disable-gpu")
+            options.add_argument("--no-sandbox")
+            options.add_argument("--disable-dev-shm-usage")
+        options.add_argument(f"--user-data-dir={user_data_dir}")
+        options.add_argument("--profile-directory=Default")
+        print("  [浏览器] 启动 Chrome...")
+        driver_path = os.environ.get("BILIBILI_CHROMEDRIVER")
+        if driver_path and Path(driver_path).exists():
+            return webdriver.Chrome(service=ChromeService(driver_path), options=options)
+        return webdriver.Chrome(options=options)
 
     # ─── 下载列表方法 ───────────────────────────────────────────────
 
@@ -156,19 +319,89 @@ class SubtitleExtractor:
         record = self._download_list.get("records", {}).get(bvid)
         return record is not None and record.get("status") == "success"
 
-    def _update_download_list(self, bvid: str, status: str, subtitle_path: str = None, error: str = None):
+    def _update_download_list(self, bvid: str, status: str, subtitle_path: str = None,
+                              error: str = None, error_code: str = None,
+                              retry_after=None, probe=None, duration_sec=0.0,
+                              source: str = None, asr_model: str = None):
         """更新下载列表中某条记录"""
         record = {
             "status": status,
             "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "schema_version": 2,
+            "probe": normalize_subtitle_probe(probe),
+            "duration_sec": duration_sec,
         }
         if subtitle_path:
             record["subtitle_path"] = subtitle_path
         if error:
             record["error"] = error
+        if error_code:
+            record["error_code"] = error_code
+        if retry_after:
+            record["retry_after"] = retry_after
+        if source:
+            record["source"] = source
+        if asr_model:
+            record["asr_model"] = asr_model
 
-        self._download_list.setdefault("records", {})[bvid] = record
-        self._save_download_list(self._get_download_list_path())
+        with download_list_lock():
+            list_path = self._get_download_list_path()
+            if list_path.exists():
+                self._download_list = self._load_download_list(list_path)
+            self._download_list.setdefault("records", {})[bvid] = record
+            self._save_download_list(list_path)
+
+    def _record_failure(self, bvid: str, kind: str, message: str):
+        self.last_failure_kind = kind
+        self.last_failure_message = message
+        self.last_duration_sec = round(
+            time.monotonic() - self._started_at, 3
+        ) if self._started_at is not None else 0.0
+        self.breaker.record(kind)
+        retry_after = self.breaker.retry_after
+        if retry_after is not None:
+            retry_after = retry_after.isoformat().replace("+00:00", "Z")
+        status = "paused" if kind in (
+            FailureKind.LOGIN_REQUIRED,
+            FailureKind.RATE_LIMITED,
+            FailureKind.BROWSER_START_FAILED,
+        ) else "failed"
+        self._update_download_list(
+            bvid,
+            status,
+            error=message,
+            error_code=kind,
+            retry_after=retry_after,
+            probe=self.last_probe,
+            duration_sec=self.last_duration_sec,
+        )
+
+    def _run_asr_fallback(self, bvid: str) -> Optional[str]:
+        """Transcribe audio only after native subtitle extraction confirmed NO_SUBTITLE."""
+        from backends.asr_rescue import run
+        result = run(
+            bvid,
+            self.output_dir.parent.parent / "tmp" / "audio",
+            self.output_dir / f"{bvid}.md",
+            browser=self.browser,
+            model_size=self.asr_model,
+        )
+        if result.status != "success":
+            raise RuntimeError(result.error or "ASR rescue failed")
+        output_path = result.path
+        if self.enrich_with_meta:
+            self._enrich_with_meta(output_path, bvid)
+        self._update_db_subtitle_path(bvid, str(output_path))
+        self.last_duration_sec = round(time.monotonic() - self._started_at, 3)
+        self._update_download_list(
+            bvid, "success", str(output_path), probe=self.last_probe,
+            duration_sec=self.last_duration_sec, source="asr",
+            asr_model=result.model,
+        )
+        self.breaker.reset()
+        self.last_failure_kind = None
+        self.last_failure_message = ""
+        return str(output_path)
 
     def to_srt_time(self, sec: float) -> str:
         """将秒数转换为 SRT 时间格式"""
@@ -202,11 +435,53 @@ class SubtitleExtractor:
         return True
 
     def extract_single(self, bvid: str, retry: bool = True) -> Optional[str]:
-        """提取单个视频的AI字幕
+        """Run one guarded job; `retry` is retained for caller compatibility."""
+        self.last_failure_kind = None
+        self.last_failure_message = ""
+        self.last_probe = normalize_subtitle_probe()
+        self.last_duration_sec = 0.0
+        if self._is_already_success(bvid):
+            self._started_at = time.monotonic()
+            print(f"  [跳过] {bvid} - 下载列表中已存在")
+            self.last_duration_sec = round(time.monotonic() - self._started_at, 3)
+            return "SKIPPED"
+        self._started_at = time.monotonic()
+        if not self.breaker.allow():
+            kind = FailureKind.RATE_LIMITED
+            message = "circuit open"
+            self.last_failure_kind = kind
+            self.last_failure_message = message
+            self.last_duration_sec = round(time.monotonic() - self._started_at, 3)
+            retry_after = self.breaker.retry_after
+            retry_after = (
+                retry_after.isoformat().replace("+00:00", "Z")
+                if retry_after else None
+            )
+            self._update_download_list(
+                bvid, "paused", error=message, error_code=kind,
+                retry_after=retry_after, probe=self.last_probe,
+                duration_sec=self.last_duration_sec,
+            )
+            return None
 
-        Args:
-            bvid: BV号
-            retry: 是否在失败时重试
+        self.rate_limiter.wait()
+        for attempt in range(2):
+            result = self._extract_single_once(bvid)
+            if result is not None:
+                return result
+            if self.last_failure_kind not in (
+                FailureKind.BROWSER_START_FAILED,
+                FailureKind.PAGE_LOAD_FAILED,
+            ) or attempt:
+                return None
+            print("  [重试] 浏览器/页面启动失败，最多重试一次...")
+            self._close_driver()
+            self.browser_restart_count += 1
+            time.sleep(3)
+        return None
+
+    def _extract_single_once(self, bvid: str) -> Optional[str]:
+        """提取单个视频的AI字幕
 
         Returns:
             字幕文件路径，失败返回 None
@@ -214,111 +489,68 @@ class SubtitleExtractor:
         # 检查下载列表：已成功下载则跳过
         if self._is_already_success(bvid):
             print(f"  [跳过] {bvid} - 下载列表中已存在")
+            self.last_duration_sec = round(
+                time.monotonic() - self._started_at, 3
+            ) if self._started_at is not None else 0.0
             return "SKIPPED"
 
         print(f"  [提取] {bvid}")
+        if self.backend == "playwright":
+            try:
+                return self._extract_single_playwright(bvid)
+            except Exception as e:
+                print(f"  [错误] Playwright 提取失败: {e}")
+                kind = FailureKind.NO_SUBTITLE if "未捕获到 AI 字幕" in str(e) else classify_failure(error=e)
+                self._record_failure(bvid, kind, str(e))
+                if kind == FailureKind.NO_SUBTITLE and self.asr_fallback:
+                    try:
+                        print(f"  [ASR] 原生字幕不存在，启动救援转录（模型: {self.asr_model}）")
+                        return self._run_asr_fallback(bvid)
+                    except Exception as rescue_error:
+                        self._record_failure(bvid, FailureKind.UNKNOWN, f"ASR rescue failed: {rescue_error}")
+                        print(f"  [错误] ASR 救援失败: {rescue_error}")
+                return None
         video_url = f"https://www.bilibili.com/video/{bvid}"
+        self.last_failure_kind = None
+        self.last_failure_message = ""
 
-        # 关闭浏览器
-        browser_process_map = {
-            "edge": "msedge.exe",
-            "chrome": "chrome.exe",
-        }
-        proc_name = browser_process_map[self.browser]
-        print(f"  [浏览器] 关闭 {self.browser}...")
-        subprocess.run(f'taskkill /F /IM {proc_name} 2>nul', shell=True)
-        time.sleep(2)
-
-        from selenium import webdriver
-
-        driver = None
+        driver = self._driver if self.reuse_browser else None
         try:
-            if self.browser == "edge":
-                from selenium.webdriver.edge.options import Options
-                user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Microsoft\Edge\User Data")
-                options = Options()
-                options.add_argument(f"--user-data-dir={user_data_dir}")
-                options.add_argument("--profile-directory=Default")
-                print("  [浏览器] 启动 Edge...")
-                driver = webdriver.Edge(options=options)
-            elif self.browser == "chrome":
-                from selenium.webdriver.chrome.options import Options
-                user_data_dir = os.path.expandvars(r"%LOCALAPPDATA%\Google\Chrome\User Data")
-                options = Options()
-                options.add_argument(f"--user-data-dir={user_data_dir}")
-                options.add_argument("--profile-directory=Default")
-                print("  [浏览器] 启动 Chrome...")
-                driver = webdriver.Chrome(options=options)
+            if driver is None:
+                driver = self._start_driver()
+                if self.reuse_browser:
+                    self._driver = driver
 
             print(f"  [页面] 打开: {video_url}")
-            driver.get(video_url)
+            if hasattr(driver, "set_page_load_timeout"):
+                driver.set_page_load_timeout(PAGE_LOAD_TIMEOUT_SECONDS)
+            try:
+                driver.get(video_url)
+            except Exception as error:
+                from selenium.common.exceptions import TimeoutException
+                if not isinstance(error, TimeoutException):
+                    raise
+                print("  [警告] 页面加载超时，继续处理已加载内容")
 
             print("  [等待] 播放器加载 (8s)...")
             time.sleep(8)
 
+            session = check_login_state(driver)
+            if not session.ok:
+                print(f"  [停止] {session.reason}")
+                if session.reason == FailureKind.PAGE_LOAD_FAILED:
+                    self._close_driver()
+                self._record_failure(bvid, session.reason, session.reason)
+                return None
+
             # 注入 JS Hook
             print("  [注入] Extension-style JS Hook...")
-            driver.execute_script("""
-                window.__capturedSubtitleUrl = null;
-                window.__capturedSubtitleData = null;
-
-                const origFetch = window.fetch;
-                window.fetch = function(...args) {
-                    const url = typeof args[0] === 'string' ? args[0] : (args[0] && args[0].url);
-                    if (url && (url.includes('aisubtitle.hdslb.com') || url.includes('ai_subtitle'))) {
-                        window.__capturedSubtitleUrl = url;
-                        console.log('[SUB] Fetch:', url);
-                    }
-                    return origFetch.apply(this, args);
-                };
-
-                const origXHROpen = window.XMLHttpRequest.prototype.open;
-                window.XMLHttpRequest.prototype.open = function(method, url, ...rest) {
-                    if (url && (url.includes('aisubtitle.hdslb.com') || url.includes('ai_subtitle'))) {
-                        this.__ai_url = url;
-                        window.__capturedSubtitleUrl = url;
-                        console.log('[SUB] XHR open:', url);
-                    }
-                    return origXHROpen.call(this, method, url, ...rest);
-                };
-
-                const origXHRSend = window.XMLHttpRequest.prototype.send;
-                window.XMLHttpRequest.prototype.send = function(...args) {
-                    const self = this;
-                    if (self.__ai_url) {
-                        self.addEventListener('load', function() {
-                            try {
-                                const text = self.responseText;
-                                const json = JSON.parse(text);
-                                if (json && json.body && Array.isArray(json.body) && json.body.length > 0) {
-                                    const one = json.body[0];
-                                    if ('from' in one && 'to' in one && 'content' in one) {
-                                        window.__capturedSubtitleData = json;
-                                        window.__capturedSubtitleUrl = self.__ai_url;
-                                        console.log('[SUB] Captured:', json.body.length, 'entries');
-                                    }
-                                }
-                            } catch(e) {
-                                console.log('[SUB] Parse error:', e.message);
-                            }
-                        });
-                    }
-                    return origXHRSend.apply(this, args);
-                };
-                console.log('[SUB] Hooks installed');
-            """)
+            install_subtitle_probe(driver)
 
             # 点击字幕按钮
             print("  [操作] 点击字幕按钮...")
             try:
-                driver.execute_script("""
-                    const btn = document.querySelector('.bpx-player-ctrl-btn.bpx-player-ctrl-subtitle') ||
-                               document.querySelector('.bpx-player-ctrl-subtitle');
-                    if (btn) {
-                        btn.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                        console.log('[SUB] Subtitle btn clicked');
-                    }
-                """)
+                _click_subtitle_button(driver)
                 time.sleep(2)
             except Exception as e:
                 print(f"  [错误] 点击字幕按钮: {e}")
@@ -326,24 +558,15 @@ class SubtitleExtractor:
             # 选择第一个语言项
             print("  [操作] 选择字幕语言...")
             try:
-                driver.execute_script("""
-                    const items = Array.from(document.querySelectorAll('.bpx-player-ctrl-subtitle-language-item-text'));
-                    if (items && items.length > 0) {
-                        const target = items[0];
-                        console.log('[SUB] Clicking:', target.textContent.trim());
-                        target.dispatchEvent(new MouseEvent('click', {bubbles: true, cancelable: true}));
-                    } else {
-                        console.log('[SUB] No language items');
-                    }
-                """)
+                _select_subtitle_language(driver)
                 time.sleep(5)
             except Exception as e:
                 print(f"  [错误] 选择语言: {e}")
 
             # 检查捕获的数据
             print("  [检查] 捕获字幕数据...")
-            url = driver.execute_script("return window.__capturedSubtitleUrl")
             data = driver.execute_script("return window.__capturedSubtitleData")
+            self.last_probe = read_subtitle_probe(driver)
 
             if data and data.get("body"):
                 body = data["body"]
@@ -353,34 +576,50 @@ class SubtitleExtractor:
                     self._update_db_subtitle_path(bvid, str(output_path))
                     # 🆕 v1.2 拼元数据 frontmatter（best-effort，不阻塞主流程）
                     if self.enrich_with_meta:
-                        self._enrich_with_meta(output_path, bvid)
+                        self._enrich_with_meta(output_path, bvid, driver)
                     # 更新下载列表
-                    self._update_download_list(bvid, "success", str(output_path))
+                    self.last_duration_sec = round(time.monotonic() - self._started_at, 3)
+                    self._update_download_list(
+                        bvid, "success", str(output_path), probe=self.last_probe,
+                        duration_sec=self.last_duration_sec,
+                    )
+                    self.breaker.reset()
+                    self.last_failure_kind = None
+                    self.last_failure_message = ""
                     return str(output_path)
             else:
-                print(f"  [警告] 未捕获到字幕 (url={bool(url)}, data={bool(data)})")
-                # 更新下载列表（失败）
-                self._update_download_list(bvid, "failed", error="未捕获到字幕")
-                if retry:
-                    print("  [重试] 第一次失败，重新尝试...")
-                    time.sleep(3)
-                    return self.extract_single(bvid, retry=False)
+                print(f"  [警告] 未捕获到字幕 (data={bool(data)})")
+                kind = classify_failure(
+                    response_status=self.last_probe.get("response_status"),
+                    subtitle_probe=self.last_probe,
+                )
+                self._record_failure(bvid, kind, "未捕获到字幕")
 
             return None
 
         except Exception as e:
             print(f"  [错误] 提取失败: {e}")
-            # 更新下载列表（失败）
-            self._update_download_list(bvid, "failed", error=str(e))
-            if retry:
-                print("  [重试] 出错重试...")
-                time.sleep(3)
-                return self.extract_single(bvid, retry=False)
+            if driver:
+                try:
+                    self.last_probe = read_subtitle_probe(driver)
+                except Exception:
+                    pass
+            kind = classify_failure(
+                error=e,
+                response_status=self.last_probe.get("response_status"),
+                subtitle_probe=self.last_probe,
+            )
+            if kind in (FailureKind.BROWSER_START_FAILED, FailureKind.PAGE_LOAD_FAILED):
+                self._close_driver()
+            self._record_failure(bvid, kind, str(e))
             return None
 
         finally:
-            if driver:
-                driver.quit()
+            if driver and not self.reuse_browser:
+                try:
+                    driver.quit()
+                except Exception as close_error:
+                    print(f"  [警告] 关闭浏览器失败: {close_error}")
 
     def _update_db_subtitle_path(self, bv_id: str, subtitle_path: str):
         """更新本项目 wiki DB (compile_db.json) 的 subtitle_srt_path 字段
@@ -408,12 +647,11 @@ class SubtitleExtractor:
         except Exception as e:
             print(f"  [wiki DB] 更新失败: {e}")
 
-    def _enrich_with_meta(self, subtitle_path: Path, bvid: str) -> None:
+    def _enrich_with_meta(self, subtitle_path: Path, bvid: str, driver=None) -> None:
         """🆕 v1.3 调用 extract_meta 抓取元数据并拼到字幕顶端
 
-        通过 subprocess 调用两个独立脚本：
-          1. extract_meta.py → JSON（优先 bundled，回退外部）
-          2. prepend_meta.py → frontmatter（同目录 bundled）
+        优先从当前 Selenium 页面读取浏览器运行时元数据并直接拼 frontmatter；
+        无浏览器 driver 时回退到 subprocess 调用独立脚本。
 
         路径查找顺序（v1.3 vendor 策略）：
           1. bundled: scripts/extract_meta.py（v1.3+ 仓库自带，独立可运行）
@@ -447,11 +685,29 @@ class SubtitleExtractor:
 
         print(f"  [meta] 来源: {meta_source}")
 
+        if driver is not None and bundled_extract.exists():
+            try:
+                from extract_meta import extract_meta_from_state
+                from prepend_meta import prepend_meta
+
+                print(f"  [meta] 从当前浏览器运行时提取 → {bvid}")
+                state = driver.execute_script("return window.__INITIAL_STATE__")
+                meta_obj = extract_meta_from_state(bvid, state)
+                if not isinstance(meta_obj, dict) or meta_obj.get("error"):
+                    print("  [meta] 浏览器页面未返回有效元数据，跳过")
+                    return
+                if prepend_meta(meta_obj, subtitle_path):
+                    print(f"  [meta] 已拼入 frontmatter → {subtitle_path.name}")
+                return
+            except Exception as e:
+                print(f"  [meta] 浏览器页面提取失败，跳过: {e}")
+                return
+
         try:
             print(f"  [meta] 抓取元数据 → {bvid}")
             meta_proc = subprocess.run(
                 [sys.executable, str(extract_meta_script), bvid, "--indent", "0"],
-                capture_output=True, text=True, timeout=30,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=30,
             )
             if meta_proc.returncode != 0:
                 print(f"  [meta] 抓取失败（rc={meta_proc.returncode}）: {meta_proc.stderr.strip()[:200]}")
@@ -477,6 +733,9 @@ class SubtitleExtractor:
             else:
                 print(f"  [meta] 返回非 dict/list（type={type(parsed).__name__}），跳过")
                 return
+            if meta_obj.get("error"):
+                print(f"  [meta] 抓取失败: {meta_obj['error']}")
+                return
             meta_json = _json.dumps(meta_obj, ensure_ascii=False)
         except subprocess.TimeoutExpired:
             print("  [meta] 抓取超时（30s），跳过")
@@ -489,7 +748,7 @@ class SubtitleExtractor:
             print(f"  [meta] 拼 frontmatter → {subtitle_path.name}")
             prepend_proc = subprocess.run(
                 [sys.executable, str(prepend_meta_script), str(subtitle_path), "--meta", meta_json],
-                capture_output=True, text=True, timeout=10,
+                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=10,
             )
             if prepend_proc.returncode != 0:
                 print(f"  [meta] 拼入失败（rc={prepend_proc.returncode}）: {prepend_proc.stderr.strip()[:200]}")
@@ -551,7 +810,12 @@ class SubtitleExtractor:
                 'subtitle_path': subtitle_path,
                 'success': subtitle_path not in (None, "SKIPPED"),
             })
-            time.sleep(2)  # 避免请求过快
+            if subtitle_path is None and self.last_failure_kind in (
+                FailureKind.LOGIN_REQUIRED,
+                FailureKind.RATE_LIMITED,
+                FailureKind.BROWSER_START_FAILED,
+            ):
+                break
 
         return results
 
@@ -562,7 +826,7 @@ class SubtitleExtractor:
             favorites_file: 收藏夹JSON文件路径
         """
         if favorites_file is None:
-            favorites_file = Path(__file__).parent.parent.parent.parent / "videos_fav.json"
+            favorites_file = favorites_path()
 
         print(f"[收藏夹字幕] 读取: {favorites_file}")
         try:
@@ -596,7 +860,12 @@ class SubtitleExtractor:
                 'subtitle_path': subtitle_path,
                 'success': subtitle_path not in (None, "SKIPPED"),
             })
-            time.sleep(2)  # 避免请求过快
+            if subtitle_path is None and self.last_failure_kind in (
+                FailureKind.LOGIN_REQUIRED,
+                FailureKind.RATE_LIMITED,
+                FailureKind.BROWSER_START_FAILED,
+            ):
+                break
 
         return results
 
@@ -608,11 +877,26 @@ def main():
     parser.add_argument('--favorites', action='store_true', help='收藏夹模式')
     parser.add_argument('--output', '-o', metavar='DIR', default=None, help='输出目录')
     parser.add_argument('--no-meta', action='store_true', help='🆕 跳过字幕顶端拼元数据 frontmatter')
-    parser.add_argument('--browser', default=None, choices=['chrome', 'edge'],
-                        help='浏览器类型（默认 chrome，省略则交互选择）')
+    parser.add_argument('--close-browser', action='store_true', help='启动前关闭同类浏览器进程（会影响其他窗口）')
+    parser.add_argument('--browser', default='chrome', choices=['chrome', 'edge'],
+                        help='浏览器类型（默认 chrome）')
+    parser.add_argument('--backend', default='playwright', choices=['playwright', 'selenium'],
+                        help='浏览器自动化后端（默认 playwright）')
+    parser.add_argument('--asr-fallback', action='store_true',
+                        help='原生字幕确认不存在时，下载音频并使用 faster-whisper 转录')
+    parser.add_argument('--asr-model', default='small',
+                        help='ASR 模型（默认 small；可选 tiny/base/medium/large-v3）')
+    parser.add_argument('--min-delay', type=float, default=8, help='视频间最小间隔秒数')
+    parser.add_argument('--max-delay', type=float, default=15, help='视频间最大间隔秒数')
+    parser.add_argument('--rate-limit-threshold', type=int, default=2, help='连续限流次数后暂停')
+    parser.add_argument('--cooldown-seconds', type=int, default=900, help='限流暂停秒数')
     parser.add_argument('--reset-config', action='store_true', help='🆕 重置配置文件，重新引导首次配置')
 
     args = parser.parse_args()
+    if args.min_delay < 0 or args.max_delay < args.min_delay:
+        parser.error('必须满足 0 <= min-delay <= max-delay')
+    if args.rate_limit_threshold < 1 or args.cooldown_seconds < 0:
+        parser.error('rate-limit-threshold 必须 >= 1，cooldown-seconds 必须 >= 0')
 
     # 🆕 重置配置
     if args.reset_config:
@@ -641,57 +925,76 @@ def main():
         output_dir=Path(args.output) if args.output else None,
         enrich_with_meta=not args.no_meta,
         browser=browser,
+        backend=args.backend,
+        asr_fallback=args.asr_fallback,
+        asr_model=args.asr_model,
+        close_browser=args.close_browser,
+        min_delay=args.min_delay,
+        max_delay=args.max_delay,
+        rate_limit_threshold=args.rate_limit_threshold,
+        cooldown_seconds=args.cooldown_seconds,
     )
+    pause_exit_codes = {
+        FailureKind.RATE_LIMITED: 10,
+        FailureKind.LOGIN_REQUIRED: 11,
+        FailureKind.BROWSER_START_FAILED: 12,
+    }
 
-    # 模式判断
-    if args.favorites:
-        print("=" * 50)
-        print("模式: 收藏夹字幕")
-        print("=" * 50)
-        results = extractor.extract_favorites()
-        success = sum(1 for r in results if r['success'])
-        print(f"\n完成: {success}/{len(results)} 成功")
+    try:
+        # 模式判断
+        if args.favorites:
+            print("=" * 50)
+            print("模式: 收藏夹字幕")
+            print("=" * 50)
+            results = extractor.extract_favorites()
+            success = sum(1 for r in results if r['success'])
+            print(f"\n完成: {success}/{len(results)} 成功")
+            if extractor.last_failure_kind in pause_exit_codes:
+                sys.exit(pause_exit_codes[extractor.last_failure_kind])
 
-    elif args.space:
-        print("=" * 50)
-        print("模式: UP主空间字幕")
-        print("=" * 50)
-        results = extractor.extract_space(args.space)
-        success = sum(1 for r in results if r['success'])
-        print(f"\n完成: {success}/{len(results)} 成功")
+        elif args.space:
+            print("=" * 50)
+            print("模式: UP主空间字幕")
+            print("=" * 50)
+            results = extractor.extract_space(args.space)
+            success = sum(1 for r in results if r['success'])
+            print(f"\n完成: {success}/{len(results)} 成功")
+            if extractor.last_failure_kind in pause_exit_codes:
+                sys.exit(pause_exit_codes[extractor.last_failure_kind])
 
-    elif args.bvid:
-        print("=" * 50)
-        print("模式: 单视频字幕")
-        print("=" * 50)
-        # 提取BV号
-        bvid = args.bvid
-        if 'bilibili.com/video/' in bvid:
-            match = re.search(r'/video/(BV[\w]+)', bvid)
-            if match:
-                bvid = match.group(1)
-        elif not bvid.startswith('BV'):
-            print(f"[错误] 无效的BV号: {bvid}")
-            sys.exit(1)
+        elif args.bvid:
+            print("=" * 50)
+            print("模式: 单视频字幕")
+            print("=" * 50)
+            bvid = args.bvid
+            if 'bilibili.com/video/' in bvid:
+                match = re.search(r'/video/(BV[\w]+)', bvid)
+                if match:
+                    bvid = match.group(1)
+            elif not bvid.startswith('BV'):
+                print(f"[错误] 无效的BV号: {bvid}")
+                sys.exit(1)
 
-        result = extractor.extract_single(bvid)
-        if result == "SKIPPED":
-            print("\n跳过: 下载列表中已存在")
-            sys.exit(0)
-        elif result:
-            print(f"\n成功: {result}")
-            sys.exit(0)
+            result = extractor.extract_single(bvid)
+            if result == "SKIPPED":
+                print("\n跳过: 下载列表中已存在")
+                sys.exit(0)
+            elif result:
+                print(f"\n成功: {result}")
+                sys.exit(0)
+            else:
+                print("\n失败: 未能提取字幕")
+                sys.exit(pause_exit_codes.get(extractor.last_failure_kind, 1))
+
         else:
-            print("\n失败: 未能提取字幕")
+            parser.print_help()
+            print("\n示例:")
+            print("  python subtitle_extractor.py BV11RffBdEEQ")
+            print("  python subtitle_extractor.py --space https://space.bilibili.com/3546663834618256/upload/video")
+            print("  python subtitle_extractor.py --favorites")
             sys.exit(1)
-
-    else:
-        parser.print_help()
-        print("\n示例:")
-        print("  python subtitle_extractor.py BV11RffBdEEQ")
-        print("  python subtitle_extractor.py --space https://space.bilibili.com/3546663834618256/upload/video")
-        print("  python subtitle_extractor.py --favorites")
-        sys.exit(1)
+    finally:
+        extractor.close()
 
 
 if __name__ == "__main__":
