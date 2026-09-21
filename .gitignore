@@ -50,5 +50,18 @@ logs/
 
 # Skill output (skill 用户自行管理)
 00_Raw/
+10_raw/
+graphify-out/
+config.json
 *.tmp
 .tmp_*
+.bili_guard_state.json
+
+# Local browser profiles and verification output
+.chrome-bilibili/
+.edge-bilibili/
+.playwright-verify/
+
+# Local runtime state
+data/
+se-metadata.json

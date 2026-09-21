@@ -44,7 +44,7 @@ from pathlib import Path
 from typing import Optional
 
 # Windows GBK 控制台兼容：强制 UTF-8 输出
-if sys.platform == "win32":
+if sys.platform == "win32" and __name__ == "__main__":
     try:
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
@@ -143,6 +143,26 @@ def extract_video_data_block(html: str) -> str:
     return js[start:end + 1]
 
 
+def _build_meta(
+    bv: str,
+    title: Optional[str],
+    uploader: Optional[str],
+    view_count: Optional[int],
+    like_count: Optional[int],
+    description: Optional[str],
+    pubdate: Optional[int],
+) -> dict:
+    return {
+        "bv": bv,
+        "title": title,
+        "uploader": uploader,
+        "view_count": view_count,
+        "like_count": like_count,
+        "description": description,
+        "video_published_at": unix_to_date(pubdate),
+    }
+
+
 def get_str(block: str, key: str) -> Optional[str]:
     """从块里提 "key": "value" 字符串值
 
@@ -209,9 +229,8 @@ def unix_to_date(ts: Optional[int]) -> Optional[str]:
         return None
 
 
-def extract_meta(bv: str) -> dict:
-    """主入口：BV 号 → {title, uploader, view_count, like_count, description, video_published_at}"""
-    html = fetch_html(bv)
+def extract_meta_from_html(bv: str, html: str) -> dict:
+    """从已经取得的视频页 HTML 提取元数据。"""
     vd_block = extract_video_data_block(html)
 
     # title 来自 videoData.title
@@ -231,17 +250,31 @@ def extract_meta(bv: str) -> dict:
 
     # video_published_at 来自 pubdate
     pubdate = get_int(vd_block, "pubdate")
-    video_published_at = unix_to_date(pubdate)
+    return _build_meta(bv, title, uploader, view_count, like_count, description, pubdate)
 
-    return {
-        "bv": bv,
-        "title": title,
-        "uploader": uploader,
-        "view_count": view_count,
-        "like_count": like_count,
-        "description": description,
-        "video_published_at": video_published_at,
-    }
+
+def extract_meta_from_state(bv: str, state: dict) -> dict:
+    """从浏览器运行时的 window.__INITIAL_STATE__ 提取元数据。"""
+    video_data = state.get("videoData") if isinstance(state, dict) else None
+    if not isinstance(video_data, dict):
+        raise RuntimeError("浏览器运行时没有 videoData")
+
+    owner = video_data.get("owner") or {}
+    stat = video_data.get("stat") or {}
+    return _build_meta(
+        bv,
+        video_data.get("title"),
+        owner.get("name") if isinstance(owner, dict) else None,
+        stat.get("view") if isinstance(stat, dict) else None,
+        stat.get("like") if isinstance(stat, dict) else None,
+        video_data.get("desc"),
+        video_data.get("pubdate"),
+    )
+
+
+def extract_meta(bv: str) -> dict:
+    """主入口：BV 号 → {title, uploader, view_count, like_count, description, video_published_at}"""
+    return extract_meta_from_html(bv, fetch_html(bv))
 
 
 def main():
@@ -344,6 +377,9 @@ def main():
         print(f"\n[完成] 总 {len(results)} 条（成功 {success} / 失败 {fail}）写入 {args.output}", file=sys.stderr)
     else:
         print(output_text)
+
+    if any("error" in result for result in results):
+        sys.exit(1)
 
 
 if __name__ == "__main__":

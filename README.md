@@ -2,7 +2,30 @@
 
 > B 站 AI 字幕下载工具 — Claude Code Skill
 >
-> 单视频 / UP 主空间 / 收藏夹三种模式批量提取字幕，自动保存为 SRT 格式。
+> 单视频 / UP 主空间 / 收藏夹 / 搜索批量 / 音频救援，自动保存为 SRT 格式。
+
+## 统一入口
+
+统一入口支持单视频、收藏夹 URL 和 UP 主空间 URL。视频来源会写入
+`data/videos_manifest.json`，任务状态写入 `data/subtitle_tasks.db`。
+
+```powershell
+# 单视频
+python scripts\cli.py --video BVxxxxxxxxxx
+
+# 收藏夹
+python scripts\cli.py --favorite-url "https://space.bilibili.com/30210365/favlist?fid=3745603465&ftype=create"
+
+# UP 主空间
+python scripts\cli.py --space-url "https://space.bilibili.com/30210365/upload/video"
+
+# 启用无原生字幕时的 ASR 兜底
+python scripts\cli.py --favorite-url "..." --asr-fallback --asr-model small
+
+# 重试失败或指定状态
+python scripts\cli.py --favorite-url "..." --retry-failed
+python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
+```
 > **🆕 v1.3 仓库自带 `extract_meta.py`（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量 / 标题 / 简介 / 点赞量 / 上传时间）并写入字幕顶端 frontmatter。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -12,7 +35,7 @@
 
 ## 特性
 
-- 🎯 **三种模式**：单视频字幕 / UP 主空间批量 / 收藏夹批量
+- 🎯 **五种能力**：单视频字幕 / UP 主空间批量 / 收藏夹批量 / 搜索批量 / 单条音频救援
 - 🪝 **JS Hook 拦截**：与 B 站浏览器扩展相同的 XHR/Fetch Hook 技术，稳定可靠
 - 📁 **自动保存到 SRT 格式**（`.md` 扩展名，与项目约定一致）
 - 🆕 **v1.3 零依赖元数据**：仓库自带 `extract_meta.py`（vendor 自 [bilibili-video-meta](https://github.com/xue1long/bilibili-video-meta) v1.2），无需安装额外 skill
@@ -27,7 +50,7 @@
 ```
 用户需求 → bilibili-subtitle-fetch → [单视频/UP主空间/收藏夹]
                                               ↓
-                                       JS Hook 拦截 (Edge)
+                                       JS Hook 拦截 (Chrome)
                                               ↓
                                        .srt 字幕文件
                                               ↓
@@ -43,12 +66,14 @@
 ### 前置条件
 
 - Python 3.7+
-- Microsoft Edge 浏览器（已登录 B 站账号）
-- `selenium` 和 `webdriver-manager`：
+- Google Chrome 浏览器（已登录 B 站账号）
+- `playwright`（字幕抓取默认后端；Selenium 仅作兼容回退）：
 
 ```bash
-pip install selenium webdriver-manager
+pip install playwright selenium webdriver-manager
 ```
+
+空间模式还需要 `yt-dlp`；音频救援需要 `faster-whisper` 和系统 `ffmpeg`。
 
 ### 🆕 v1.3 元数据功能
 
@@ -94,11 +119,71 @@ python scripts/subtitle_extractor.py BV1xxxxxxxxxx --no-meta
 python scripts/subtitle_extractor.py BV1xxxxxxxxxx --output /path/to/output/
 ```
 
+### 搜索并批量下载
+
+```bash
+pip install playwright
+python scripts/fetch_search_bvids.py "关键词" 20
+python scripts/run_subtitle_batch.py
+```
+
+搜索模式默认复用 Chrome profile；运行前请关闭正在使用该 profile 的 Chrome 窗口。需要使用 Edge 时可显式传入 `--browser edge`（搜索）或批处理位置参数 `edge`。
+
+### 风控与恢复
+
+默认每条视频间隔 8–15 秒，连续 2 次观测到 412/429 后暂停 15 分钟。可按需调整：
+
+```bash
+python scripts/run_subtitle_batch.py --min-delay 8 --max-delay 15 \
+  --rate-limit-threshold 2 --cooldown-seconds 900
+```
+
+登录失效会返回 `LOGIN_REQUIRED` 并停止；浏览器/页面启动失败最多重试一次。批处理退出码为：`0` 正常、`10` 限流暂停、`11` 需要登录、`12` 浏览器启动失败。熔断状态保存在输出目录的 `.bili_guard_state.json`，等待 `retry_after` 后重跑即可；已成功记录会跳过，未访问的视频保持待处理。
+
+批处理健康路径复用一个浏览器实例，并在批处理结束时关闭一次；浏览器启动或页面加载失败最多重建一次。登录失败和限流不重建浏览器；无论成功、失败还是 CLI 提前退出，浏览器都会走幂等关闭路径。
+
+### 监控输出契约
+
+搜索结果的 `title_source` 只有 `card`（搜索卡片标题）、`detail`（详情页补取）和 `unresolved`（两者都没有）。批处理结果的每条记录都包含 `probe` 和 `duration_sec`：
+
+```json
+{
+  "probe": {
+    "request_observed": false,
+    "response_status": null,
+    "payload_received": false,
+    "subtitle_count": 0,
+    "language_count": 0,
+    "hook_installed": false,
+    "page_ready": false,
+    "button_found": false,
+    "click_dispatched": false,
+    "request_count": 0
+  },
+  "duration_sec": 1.234
+}
+```
+
+`SUBTITLE_NOT_OBSERVED` 表示没有观察到字幕请求；`NO_SUBTITLE` 表示请求成功但没有字幕；`SUBTITLE_API_FAILED` 表示请求失败或状态未知；`LOGIN_REQUIRED` 表示登录态不可用；`RATE_LIMITED` 表示实际观测到 412/429。只有连续达到阈值的 412/429 才打开全局熔断，普通字幕缺失只记录为当前视频失败，不暂停后续视频。
+
+监控只保存上述结构化证据，不持久化 cookies、Authorization headers、响应 body、页面文本或原始响应 URL。
+
+项目不处理 CAPTCHA，不轮换代理/IP，也不伪装浏览器指纹。
+
+### 单条音频救援
+
+```bash
+pip install faster-whisper playwright
+python scripts/rescue_one_subtitle.py BV1xxxxxxxxxx --model small
+```
+
+系统需要可执行的 `ffmpeg`。可通过 `BILIBILI_SFETCH_ROOT`、`BILIBILI_SFETCH_CHROME_PROFILE`、`BILIBILI_SFETCH_EDGE_PROFILE`、`BILIBILI_SFETCH_CHROMEDRIVER` 和 `BILIBILI_SFETCH_CHROME_BIN` 覆盖默认路径。
+
 ---
 
 ## 输出格式
 
-文件保存到 `00_Raw/01_B站视频转录/{BV号}.md`（默认路径，可用 `--output` 覆盖）：
+文件默认保存到 `10_raw/01_B站视频转录/{BV号}.md`（可用 `--output` 覆盖）：
 
 ### 🆕 v1.3+ 输出示例
 
@@ -149,24 +234,28 @@ description: |
 
 | 层级 | 数据源 | 命中条件 |
 |------|--------|----------|
-| 1 | 磁盘 | `00_Raw/01_B站视频转录/{BV号}.md` 已存在 |
+| 1 | 磁盘 | `10_raw/01_B站视频转录/{BV号}.md` 已存在 |
 | 2 | Wiki DB | `scripts/compile_db.json` 的 `records[].id` 已包含此 BV 号 |
 
 ---
 
 ## 已知问题
 
-1. **第二次必成功**：首次失败后重试几乎必成功（Edge session 问题）
+1. **第二次必成功**：首次失败后重试几乎必成功（Chrome session 问题）
 2. **需要登录态**：AI 字幕需 B 站账号登录，未登录只能获取普通字幕
 3. **单字幕优先**：多字幕时默认选第一个语言项
-4. **Windows Unicode**：打印 Unicode 符号可能报错，脚本已处理
+4. **Windows Unicode**：脚本会以 UTF-8 输出；旧版控制台仍可能显示替换字符
 
 ---
 
 ## 依赖安装汇总
 
 ```bash
-pip install selenium webdriver-manager
+pip install playwright selenium webdriver-manager
+pip install yt-dlp                 # --space
+pip install playwright              # 搜索批量 / 音频救援
+pip install faster-whisper         # 音频救援
+# 另需系统 ffmpeg（音频救援）
 # Python 标准库：json, re, time, urllib, gzip, zlib（无需安装）
 ```
 
@@ -190,7 +279,12 @@ bilibili-subtitle-fetch/
 └── scripts/
     ├── subtitle_extractor.py      # 主脚本（Selenium + JS Hook 抓字幕）
     ├── extract_meta.py            # 🆕 v1.3 vendor：抓视频元数据（自 bilibili-video-meta v1.2）
-    └── prepend_meta.py            # 🆕 v1.2：把元数据拼成 frontmatter 写到字幕顶端
+    ├── prepend_meta.py            # 🆕 v1.2：把元数据拼成 frontmatter 写到字幕顶端
+    ├── fetch_search_bvids.py      # 🆕 搜索结果抓 BV 号
+    ├── run_subtitle_batch.py      # 🆕 批量下载字幕
+    ├── rescue_one_subtitle.py     # 🆕 音频 ASR 救援
+    ├── _driver_patch.py           # 🆕 可选本地 driver 适配
+    └── runtime_paths.py           # 运行时路径解析
 ```
 
 ---
