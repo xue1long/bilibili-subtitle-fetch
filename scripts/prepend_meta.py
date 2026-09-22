@@ -65,6 +65,10 @@ def build_frontmatter(meta: dict) -> str:
         lines.append(f"platform: {_yaml_escape(meta['platform'])}")
     if meta.get("video_id"):
         lines.append(f"video_id: {_yaml_escape(str(meta['video_id']))}")
+    if meta.get("note_id"):
+        lines.append(f"note_id: {_yaml_escape(str(meta['note_id']))}")
+    if meta.get("note_type"):
+        lines.append(f"note_type: {_yaml_escape(meta['note_type'])}")
 
     # 基础字段（出现顺序敏感：与 wiki 卡片模板一致）
     if meta.get("title"):
@@ -87,6 +91,12 @@ def build_frontmatter(meta: dict) -> str:
         lines.append(f"url: {meta['url']}")
     if meta.get("transcript_model"):
         lines.append(f"transcript_model: {_yaml_escape(meta['transcript_model'])}")
+    if meta.get("asset_count") is not None:
+        lines.append(f"asset_count: {meta['asset_count']}")
+    if meta.get("assets"):
+        lines.append("assets:")
+        for asset in meta["assets"]:
+            lines.append(f"  - {_yaml_escape(str(asset))}")
 
     # 简介：使用 | literal block scalar 保留换行
     if meta.get("description"):

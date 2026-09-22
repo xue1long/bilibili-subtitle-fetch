@@ -135,3 +135,21 @@ $env:DOUYIN_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-d
 ```
 
 抖音 ASR 同样需要 `faster-whisper` 和系统 `ffmpeg`；追加 `--keep-video` 可保留下载的视频文件。
+
+## 11. 小红书视频和图文
+
+直接传入小红书分享的完整 `/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page` 链接：
+
+```powershell
+python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
+```
+
+默认先用无 Cookie 页面提取媒体；页面需要登录态时，再使用项目根目录 `.chrome-xiaohongshu`。自定义 profile：
+
+```powershell
+$env:XHS_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-xiaohongshu"
+```
+
+如果返回 `LOGIN_REQUIRED`，先运行 `python scripts\open_xiaohongshu_login.py`，在打开的窗口中完成一次人工登录，再重试下载。
+
+结果保存在 `10_raw\03_小红书\<笔记ID>\`。视频为 `video.mp4`，图文为按原比例缩小 50% 的 `images\*.webp`，`<笔记ID>.md` 是包含标题、作者、简介、资源数量和相对路径清单的元数据文件。签名 URL 不写入元数据；已有同名目录需追加 `--overwrite`。

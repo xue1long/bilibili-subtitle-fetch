@@ -21,6 +21,7 @@ agent: general-purpose
 | 旧单视频入口 | `python scripts/subtitle_extractor.py BVxxxxxxxxxx` |
 | 单条 ASR 救援 | `python scripts/rescue_one_subtitle.py BVxxxxxxxxxx --model small` |
 | 抖音单视频 | `python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=...&showTab=favorite_collection"` |
+| 小红书视频/图文 | `python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"` |
 
 推荐使用 `cli.py`：它发现来源、写入 manifest，并用 SQLite 规划可恢复任务。旧入口仍保留 `--space`、`--favorites`、`--output`、`--no-meta`、`--backend` 等选项；`--favorites` 读取项目根目录的 `videos_fav.json`。
 
@@ -61,6 +62,18 @@ python scripts/run_subtitle_batch.py
 python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=7687559858779351972&showTab=favorite_collection"
 ```
 
+## 小红书视频和图文
+
+`xiaohongshu_cli.py` 支持 `/explore/<笔记ID>` 和 `/board/<笔记ID>` 单条笔记；请传入包含 `xsec_token`、`xsec_source`、`source` 的完整分享 URL。先用无 Cookie Playwright 页面读取标题、作者、简介和媒体 URL；没有资源时再使用 `.chrome-xiaohongshu` profile。视频保存为 `video.mp4`，图文保存为按原比例缩小 50% 的 `images/*.webp`，同目录 `<笔记ID>.md` 保存 YAML 元数据和相对资源清单。
+
+```powershell
+python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
+```
+
+默认目录是 `10_raw/03_小红书/<笔记ID>/`；可用 `--output` 覆盖，已有目录需显式追加 `--overwrite`。默认 profile 是 `.chrome-xiaohongshu`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖。签名 URL 不落盘，不处理 CAPTCHA、付费限制或 DRM。
+
+若返回 `LOGIN_REQUIRED`，先运行 `python scripts/open_xiaohongshu_login.py`，完成一次人工登录后再重试。
+
 ## 处理规则
 
 1. 来源按 BV 号去重；统一入口跳过 SQLite 中成功的任务。
@@ -79,6 +92,8 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=76
 - `scripts/storage/`：manifest、SQLite 和旧 JSON 存储。
 - `scripts/extract_meta.py` / `scripts/prepend_meta.py`：元数据读取与 frontmatter 写入。
 - `scripts/douyin_media.py` / `scripts/douyin_cli.py`：抖音匿名优先下载、音频提取和 ASR 转录。
+- `scripts/xiaohongshu_media.py` / `scripts/xiaohongshu_cli.py`：小红书视频和图文媒体发现、下载与元数据清单。
+- `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
 
 修改抓取、状态或风控逻辑后运行：
 

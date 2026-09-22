@@ -9,6 +9,8 @@
 - `scripts/fetch_search_bvids.py` / `scripts/run_subtitle_batch.py`：搜索并批量下载。
 - `scripts/rescue_one_subtitle.py`：单条视频的 DASH 音频 + faster-whisper 救援。
 - `scripts/douyin_cli.py`：抖音单视频匿名优先下载、音频提取和 faster-whisper 转录。
+- `scripts/xiaohongshu_cli.py`：小红书单条视频/图文下载和元数据清单。
+- `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
 - `scripts/sources/`：视频来源适配器。
 - `scripts/pipeline/`：任务模型和去重规划。
 - `scripts/backends/`：Playwright 字幕与 ASR 后端。
@@ -16,6 +18,7 @@
 - `tests/`：单元测试与入口/浏览器生命周期测试。
 - `10_raw/01_B站视频转录/`：默认字幕输出目录。
 - `10_raw/02_抖音视频转录/`：抖音字幕输出目录。
+- `10_raw/03_小红书/<笔记ID>/`：小红书媒体和 `<笔记ID>.md` 输出目录。
 
 ## 技能索引
 
@@ -39,6 +42,7 @@ python scripts\cli.py --video BVxxxxxxxxxx
 python scripts\cli.py --favorite-url "https://space.bilibili.com/.../favlist?fid=..."
 python scripts\cli.py --space-url "https://space.bilibili.com/.../upload/video"
 python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=...&showTab=favorite_collection"
+python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
 
 启用 ASR 兜底或重试任务：
@@ -64,6 +68,8 @@ python scripts\cli.py --favorite-url "..." --retry-failed
 - `scripts/compile_db.json` 仅在文件存在且含对应 record 时写入字幕路径，不是任务状态库。
 - ASR 需要 `faster-whisper` 和系统 `ffmpeg`；空间模式需要 `yt-dlp`。
 - 抖音流程先匿名提取；失败才使用 `yt-dlp` 和可选的 `.chrome-douyin` profile，环境变量 `DOUYIN_SFETCH_CHROME_PROFILE` 可覆盖。
+- 小红书流程先匿名提取；失败才使用 `.chrome-xiaohongshu` profile，环境变量 `XHS_SFETCH_CHROME_PROFILE` 可覆盖。签名 CDN URL 只在内存中使用。
+- 小红书入口使用分享页完整 URL；无 Cookie 页面跳转 `/login` 时返回 `LOGIN_REQUIRED`，不能把登录页误判为资源不存在。
 - 不提交 `.chrome-bilibili/`、`.venv/`、字幕、音频、模型缓存或账号状态。
 - 不记录或提交 Cookie、Authorization header、响应 body、页面文本和原始响应 URL；不绕过 CAPTCHA、付费限制或风控。
 

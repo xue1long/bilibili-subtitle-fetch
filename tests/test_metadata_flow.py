@@ -118,6 +118,30 @@ class MetadataFlowTest(unittest.TestCase):
             self.assertIn("transcript_model: small", content)
             self.assertIn("00:00:00,000 --> 00:00:01,000", content)
 
+    def test_prepend_meta_supports_xiaohongshu_assets(self):
+        with tempfile.TemporaryDirectory() as directory:
+            subtitle_path = Path(directory) / "note.md"
+            subtitle_path.write_text("", encoding="utf-8")
+            self.assertTrue(
+                prepend_meta.prepend_meta(
+                    {
+                        "platform": "xiaohongshu",
+                        "note_id": "note1",
+                        "note_type": "image",
+                        "title": "图文",
+                        "asset_count": 2,
+                        "assets": ["images/01.webp", "images/02.webp"],
+                    },
+                    subtitle_path,
+                )
+            )
+            content = subtitle_path.read_text(encoding="utf-8")
+            self.assertIn("note_id: note1", content)
+            self.assertIn("note_type: image", content)
+            self.assertIn("asset_count: 2", content)
+            self.assertIn("assets:", content)
+            self.assertIn("- images/01.webp", content)
+
 
 if __name__ == "__main__":
     unittest.main()

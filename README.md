@@ -32,6 +32,8 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 
 抖音单视频也支持匿名优先下载：页面即使提示登录，只要页面自动加载了目标视频，程序会按 `modal_id` 提取媒体并转录；匿名解析失败才使用 `yt-dlp` 或可选登录 profile。
 
+小红书支持单条视频和图文笔记下载：自动保存媒体、笔记元数据和资源清单。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 
@@ -143,6 +145,14 @@ python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=76
 ```
 
 输出默认是 `10_raw/02_抖音视频转录/DY<视频ID>.md`，包含 YAML 元数据和 SRT 字幕；需要保留下载视频时追加 `--keep-video`。匿名解析失败时，可用 `DOUYIN_SFETCH_CHROME_PROFILE` 指向登录 profile。
+
+### 小红书视频和图文
+
+```powershell
+python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
+```
+
+请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）。默认输出到 `10_raw/03_小红书/<笔记ID>/`：视频笔记包含 `video.mp4`，图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片；同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令先使用无 Cookie 页面，页面无法发现资源时才尝试 `.chrome-xiaohongshu`；需要登录时先运行 `python scripts\open_xiaohongshu_login.py`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。
 
 ### 搜索并批量下载
 

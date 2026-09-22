@@ -60,6 +60,7 @@ config.json
 # Local browser profiles and verification output
 .chrome-bilibili/
 .chrome-douyin/
+.chrome-xiaohongshu/
 .edge-bilibili/
 .playwright-verify/
 
