@@ -30,6 +30,8 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 旧的 `subtitle_extractor.py`、搜索批处理和单条救援入口仍保留，见下文。
 > **🆕 v1.3 仓库自带 `extract_meta.py`（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量 / 标题 / 简介 / 点赞量 / 上传时间）并写入字幕顶端 frontmatter。**
 
+抖音单视频也支持匿名优先下载：页面即使提示登录，只要页面自动加载了目标视频，程序会按 `modal_id` 提取媒体并转录；匿名解析失败才使用 `yt-dlp` 或可选登录 profile。
+
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 
@@ -133,6 +135,14 @@ python scripts/subtitle_extractor.py BV1xxxxxxxxxx --no-meta
 ```bash
 python scripts/subtitle_extractor.py BV1xxxxxxxxxx --output /path/to/output/
 ```
+
+### 抖音视频转录
+
+```powershell
+python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=7687559858779351972&showTab=favorite_collection"
+```
+
+输出默认是 `10_raw/02_抖音视频转录/DY<视频ID>.md`，包含 YAML 元数据和 SRT 字幕；需要保留下载视频时追加 `--keep-video`。匿名解析失败时，可用 `DOUYIN_SFETCH_CHROME_PROFILE` 指向登录 profile。
 
 ### 搜索并批量下载
 

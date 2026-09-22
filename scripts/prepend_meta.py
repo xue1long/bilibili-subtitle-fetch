@@ -61,6 +61,11 @@ def build_frontmatter(meta: dict) -> str:
     """
     lines = ["---"]
 
+    if meta.get("platform"):
+        lines.append(f"platform: {_yaml_escape(meta['platform'])}")
+    if meta.get("video_id"):
+        lines.append(f"video_id: {_yaml_escape(str(meta['video_id']))}")
+
     # 基础字段（出现顺序敏感：与 wiki 卡片模板一致）
     if meta.get("title"):
         lines.append(f"title: {_yaml_escape(meta['title'])}")
@@ -78,6 +83,10 @@ def build_frontmatter(meta: dict) -> str:
         lines.append(f"bvid: {meta['bv']}")
     if meta.get("bv"):
         lines.append(f"url: https://www.bilibili.com/video/{meta['bv']}")
+    elif meta.get("url"):
+        lines.append(f"url: {meta['url']}")
+    if meta.get("transcript_model"):
+        lines.append(f"transcript_model: {_yaml_escape(meta['transcript_model'])}")
 
     # 简介：使用 | literal block scalar 保留换行
     if meta.get("description"):

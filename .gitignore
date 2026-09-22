@@ -59,6 +59,7 @@ config.json
 
 # Local browser profiles and verification output
 .chrome-bilibili/
+.chrome-douyin/
 .edge-bilibili/
 .playwright-verify/
 

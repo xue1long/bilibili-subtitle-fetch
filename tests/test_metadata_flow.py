@@ -8,6 +8,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 import extract_meta
+import prepend_meta
 from subtitle_extractor import SubtitleExtractor
 
 
@@ -85,6 +86,37 @@ class MetadataFlowTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "True")
+
+    def test_prepend_meta_supports_douyin_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            subtitle_path = Path(directory) / "DY123.md"
+            subtitle_path.write_text(
+                "1\n00:00:00,000 --> 00:00:01,000\n字幕\n",
+                encoding="utf-8",
+            )
+
+            self.assertTrue(
+                prepend_meta.prepend_meta(
+                    {
+                        "platform": "douyin",
+                        "video_id": "123",
+                        "title": "标题",
+                        "uploader": "作者",
+                        "description": "简介",
+                        "url": "https://www.douyin.com/video/123",
+                        "transcript_model": "small",
+                    },
+                    subtitle_path,
+                )
+            )
+
+            content = subtitle_path.read_text(encoding="utf-8")
+            self.assertIn("platform: douyin", content)
+            self.assertIn("video_id: 123", content)
+            self.assertIn("url: https://www.douyin.com/video/123", content)
+            self.assertIn("description: |", content)
+            self.assertIn("transcript_model: small", content)
+            self.assertIn("00:00:00,000 --> 00:00:01,000", content)
 
 
 if __name__ == "__main__":

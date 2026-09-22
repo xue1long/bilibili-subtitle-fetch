@@ -10,7 +10,7 @@
 | 依赖 | 要求 | 说明 |
 |------|------|------|
 | Python | 3.7+（实测 3.13 可用） | 建议用虚拟环境隔离 |
-| Google Chrome | 已登录 B 站账号 | 字幕抓取需要登录态 |
+| Google Chrome | 已登录 B 站账号（抖音可选） | B 站字幕需要登录态；抖音先匿名尝试 |
 | ffmpeg | 系统 PATH 内 | **仅音频救援模式**需要 |
 | 网络 | 可访问 bilibili.com | — |
 
@@ -119,3 +119,19 @@ python scripts\cli.py --video BVxxxxxxxxxx
 python scripts\cli.py --space-url "https://space.bilibili.com/xxx/upload/video"
 python scripts\cli.py --favorite-url "https://space.bilibili.com/xxx/favlist?fid=xxx"
 ```
+
+## 10. 抖音匿名优先转录
+
+抖音页面提示登录时，先直接运行单视频命令；只要目标视频已自动加载，程序会按 `modal_id` 提取视频链接，不要求先登录：
+
+```powershell
+python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=7687559858779351972&showTab=favorite_collection"
+```
+
+默认输出 `10_raw\02_抖音视频转录\DY7687559858779351972.md`，包含视频元数据和 SRT 字幕。匿名解析失败后才尝试 `yt-dlp`，最后使用项目 `.chrome-douyin`；自定义登录 profile：
+
+```powershell
+$env:DOUYIN_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-douyin"
+```
+
+抖音 ASR 同样需要 `faster-whisper` 和系统 `ffmpeg`；追加 `--keep-video` 可保留下载的视频文件。

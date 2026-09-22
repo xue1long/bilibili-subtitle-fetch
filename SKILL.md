@@ -20,6 +20,7 @@ agent: general-purpose
 | 重试失败 | 追加 `--retry-failed`；暂停任务另加 `--retry-paused` |
 | 旧单视频入口 | `python scripts/subtitle_extractor.py BVxxxxxxxxxx` |
 | 单条 ASR 救援 | `python scripts/rescue_one_subtitle.py BVxxxxxxxxxx --model small` |
+| 抖音单视频 | `python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=...&showTab=favorite_collection"` |
 
 推荐使用 `cli.py`：它发现来源、写入 manifest，并用 SQLite 规划可恢复任务。旧入口仍保留 `--space`、`--favorites`、`--output`、`--no-meta`、`--backend` 等选项；`--favorites` 读取项目根目录的 `videos_fav.json`。
 
@@ -52,6 +53,14 @@ python scripts/run_subtitle_batch.py
 
 成功字幕会尽力写入 YAML frontmatter。Playwright 优先从当前已登录页面的 `window.__INITIAL_STATE__.videoData` 读取元数据，避免额外无 Cookie 请求；读取失败不影响字幕主流程。使用 `--no-meta` 关闭。
 
+## 抖音单视频
+
+`douyin_cli.py` 先用无 Cookie 临时 Playwright 页面提取与 `modal_id` 精确关联的媒体 URL，并通过 Range 探测后流式下载；页面提示登录不等于不能下载。匿名解析失败后才回退 `yt-dlp`，最后才使用 `.chrome-douyin` 登录 profile。输出为 `10_raw/02_抖音视频转录/DY<视频ID>.md`，包含 `platform`、`video_id`、`title`、`uploader`、`description`（有则写入）、`url` 和 `transcript_model`。
+
+```powershell
+python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=7687559858779351972&showTab=favorite_collection"
+```
+
 ## 处理规则
 
 1. 来源按 BV 号去重；统一入口跳过 SQLite 中成功的任务。
@@ -69,6 +78,7 @@ python scripts/run_subtitle_batch.py
 - `scripts/backends/`：Playwright 字幕和 ASR 后端。
 - `scripts/storage/`：manifest、SQLite 和旧 JSON 存储。
 - `scripts/extract_meta.py` / `scripts/prepend_meta.py`：元数据读取与 frontmatter 写入。
+- `scripts/douyin_media.py` / `scripts/douyin_cli.py`：抖音匿名优先下载、音频提取和 ASR 转录。
 
 修改抓取、状态或风控逻辑后运行：
 
