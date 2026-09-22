@@ -1,12 +1,12 @@
 # bilibili-subtitle-fetch
 
-> B 站 AI 字幕下载工具 — Claude Code Skill
+> B 站 AI 字幕下载工具 — Playwright + SQLite 可恢复流水线
 >
 > 单视频 / UP 主空间 / 收藏夹 / 搜索批量 / 音频救援，自动保存为 SRT 格式。
 
 ## 统一入口
 
-统一入口支持单视频、收藏夹 URL 和 UP 主空间 URL。视频来源会写入
+推荐使用统一入口：它支持单视频、收藏夹 URL 和 UP 主空间 URL。视频来源会写入
 `data/videos_manifest.json`，任务状态写入 `data/subtitle_tasks.db`。
 
 ```powershell
@@ -26,6 +26,8 @@ python scripts\cli.py --favorite-url "..." --asr-fallback --asr-model small
 python scripts\cli.py --favorite-url "..." --retry-failed
 python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 ```
+
+旧的 `subtitle_extractor.py`、搜索批处理和单条救援入口仍保留，见下文。
 > **🆕 v1.3 仓库自带 `extract_meta.py`（vendor 自 bilibili-video-meta），零外部依赖即可自动抓取视频元数据（播放量 / 标题 / 简介 / 点赞量 / 上传时间）并写入字幕顶端 frontmatter。**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
@@ -36,7 +38,7 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 ## 特性
 
 - 🎯 **五种能力**：单视频字幕 / UP 主空间批量 / 收藏夹批量 / 搜索批量 / 单条音频救援
-- 🪝 **JS Hook 拦截**：与 B 站浏览器扩展相同的 XHR/Fetch Hook 技术，稳定可靠
+- 🌐 **浏览器网络监听**：在登录态浏览器中监听 AI 字幕响应，稳定可靠
 - 📁 **自动保存到 SRT 格式**（`.md` 扩展名，与项目约定一致）
 - 🆕 **v1.3 零依赖元数据**：仓库自带 `extract_meta.py`（vendor 自 [bilibili-video-meta](https://github.com/xue1long/bilibili-video-meta) v1.2），无需安装额外 skill
 - 🆕 **v1.3 自动拼入 frontmatter**：下载字幕后自动抓取 6 字段元数据（标题 / UP 主 / 播放量 / 点赞数 / 简介 / 上传时间）作为 YAML frontmatter 写到字幕文件顶端
@@ -49,14 +51,14 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 
 ```
 用户需求 → bilibili-subtitle-fetch → [单视频/UP主空间/收藏夹]
-                                              ↓
-                                       JS Hook 拦截 (Chrome)
-                                              ↓
-                                       .srt 字幕文件
-                                              ↓
-                          🆕 v1.2: 自动调 bilibili-video-meta
-                                              ↓
-                                       YAML frontmatter
+                                               ↓
+                                  Playwright 持久化 profile
+                                               ↓
+                                  AI 字幕响应 → SRT 内容
+                                               ↓
+                           🆕 v1.2: 从 videoData 生成元数据
+                                               ↓
+                                      `.md` 字幕文件
 ```
 
 ---
@@ -70,10 +72,22 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 - `playwright`（字幕抓取默认后端；Selenium 仅作兼容回退）：
 
 ```bash
+# 推荐先建 venv 隔离，再安装依赖
+pip install -r requirements.txt        # 仓库自带依赖清单（含 playwright/selenium/yt-dlp/faster-whisper/pytest）
+# 仅装最小依赖（等价）：
 pip install playwright selenium webdriver-manager
+
+# ⚠️ 必做：下载 Playwright 浏览器二进制（只装 pip 包不够，否则后端起不来）
+playwright install chromium
 ```
 
 空间模式还需要 `yt-dlp`；音频救援需要 `faster-whisper` 和系统 `ffmpeg`。
+
+默认 Chrome profile 是项目根目录的 `.chrome-bilibili`；可用
+`BILIBILI_SFETCH_CHROME_PROFILE` 覆盖。首次登录可运行
+`python scripts/open_playwright_login.py`。
+
+> 📌 完整初始化流程（venv / 登录态 profile / 跳过首次向导）见 [SETUP.md](SETUP.md)。
 
 ### 🆕 v1.3 元数据功能
 
@@ -104,7 +118,8 @@ python scripts/subtitle_extractor.py --space "https://space.bilibili.com/3546663
 python scripts/subtitle_extractor.py --favorites
 ```
 
-> 收藏夹模式需先运行 `update-bilibili-favorites` 生成 `videos_fav.json`。
+旧入口的 `--favorites` 读取项目根目录的 `videos_fav.json`；新任务应直接使用上面的
+`--favorite-url`。
 
 ### 🆕 v1.2 元数据开关
 
@@ -127,7 +142,7 @@ python scripts/fetch_search_bvids.py "关键词" 20
 python scripts/run_subtitle_batch.py
 ```
 
-搜索模式默认复用 Chrome profile；运行前请关闭正在使用该 profile 的 Chrome 窗口。需要使用 Edge 时可显式传入 `--browser edge`（搜索）或批处理位置参数 `edge`。
+搜索模式默认复用 Chrome profile；运行前请关闭正在使用该 profile 的 Chrome 窗口。搜索需要 Edge 时可传入 `--browser edge`；批处理需要旧 Selenium Edge 流程时使用位置参数 `edge --backend selenium`。
 
 ### 风控与恢复
 
@@ -224,39 +239,40 @@ description: |
 | `description` | `videoData.desc` | 视频简介（含换行） |
 | `video_published_at` | `videoData.pubdate` | 发布日期（YYYY-MM-DD） |
 
-元数据来自 bundled 的 `extract_meta.py`（vendor 自 [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) v1.2），无需登录、抓取稳定。
+元数据优先来自已登录 Playwright 页面中的 `videoData`，由 bundled 的
+`extract_meta.py`（vendor 自 [`bilibili-video-meta`](https://github.com/xue1long/bilibili-video-meta) v1.2）解析；失败时只跳过 enrichment，不影响字幕下载。
 
 ---
 
 ## 跳过逻辑（去重）
 
-每次提取前两层去重检查，命中任意一层即跳过：
+统一入口和旧入口使用不同的状态层：
 
 | 层级 | 数据源 | 命中条件 |
 |------|--------|----------|
-| 1 | 磁盘 | `10_raw/01_B站视频转录/{BV号}.md` 已存在 |
-| 2 | Wiki DB | `scripts/compile_db.json` 的 `records[].id` 已包含此 BV 号 |
+| 1 | SQLite（统一入口） | `data/subtitle_tasks.db` 中状态为 `native_success` 或 `asr_success` |
+| 2 | `download_list.json`（旧入口） | `{output_dir}/records[{BV号}].status == "success"` |
+
+首次创建 `download_list.json` 时会扫描输出目录中的 `.md` 文件；`compile_db.json`
+仅在存在对应 Wiki record 时补写字幕路径，不参与去重。
 
 ---
 
 ## 已知问题
 
-1. **第二次必成功**：首次失败后重试几乎必成功（Chrome session 问题）
-2. **需要登录态**：AI 字幕需 B 站账号登录，未登录只能获取普通字幕
+1. **需要登录态**：AI 字幕和 ASR 救援都需要可用的 B 站 cookie
+2. **profile 占用**：同一个持久化 profile 不能同时被多个浏览器进程使用
 3. **单字幕优先**：多字幕时默认选第一个语言项
-4. **Windows Unicode**：脚本会以 UTF-8 输出；旧版控制台仍可能显示替换字符
+4. **Windows Unicode**：脚本以 UTF-8 输出；旧版控制台仍可能显示替换字符
 
 ---
 
 ## 依赖安装汇总
 
 ```bash
-pip install playwright selenium webdriver-manager
-pip install yt-dlp                 # --space
-pip install playwright              # 搜索批量 / 音频救援
-pip install faster-whisper         # 音频救援
+pip install -r requirements.txt
+playwright install chromium         # ⚠️ 必做：下载浏览器二进制
 # 另需系统 ffmpeg（音频救援）
-# Python 标准库：json, re, time, urllib, gzip, zlib（无需安装）
 ```
 
 ---
@@ -272,28 +288,39 @@ pip install faster-whisper         # 音频救援
 
 ```
 bilibili-subtitle-fetch/
-├── SKILL.md                       # Claude Code skill 描述
+├── AGENT.md                       # Agent 项目约定
+├── SKILL.md                       # 字幕抓取 skill
 ├── README.md                      # 本文件
+├── SETUP.md                       # Windows/PowerShell 初始化
+├── requirements.txt               # Python 依赖
 ├── LICENSE                        # MIT
 ├── .gitignore
 └── scripts/
-    ├── subtitle_extractor.py      # 主脚本（Selenium + JS Hook 抓字幕）
+    ├── cli.py                     # 🆕 统一入口（单视频 / 收藏夹 URL / UP 空间）
+    ├── subtitle_extractor.py      # 兼容入口（默认 Playwright 监听字幕；Selenium 兼容回退）
+    ├── open_playwright_login.py   # 打开登录窗口，写入项目专用 profile（.chrome-bilibili）
     ├── extract_meta.py            # 🆕 v1.3 vendor：抓视频元数据（自 bilibili-video-meta v1.2）
     ├── prepend_meta.py            # 🆕 v1.2：把元数据拼成 frontmatter 写到字幕顶端
     ├── fetch_search_bvids.py      # 🆕 搜索结果抓 BV 号
     ├── run_subtitle_batch.py      # 🆕 批量下载字幕
     ├── rescue_one_subtitle.py     # 🆕 音频 ASR 救援
-    ├── _driver_patch.py           # 🆕 可选本地 driver 适配
-    └── runtime_paths.py           # 运行时路径解析
+    ├── runtime_paths.py           # 运行时路径解析
+    ├── backends/                  # 抓取后端：playwright_subtitle / asr_rescue
+    ├── pipeline/                  # 批处理流水线
+    ├── sources/                   # 视频源解析（空间 / 收藏夹 / 搜索）
+    └── storage/                   # manifest / SQLite / 旧 JSON 迁移
 ```
+
+运行时生成的 `data/`、`10_raw/`、`.batch/`、`.chrome-bilibili/` 和临时音频不应提交。
 
 ---
 
 ## 版本历史
 
 - **v1.3** (2026-06-10) — Vendor `extract_meta.py`，零外部依赖
+- **v1.8** (2026-09-21) — 统一来源、任务规划和 SQLite 状态库；保留旧入口兼容
 - **v1.2** (2026-06-10) — 新增"下载字幕后自动拼元数据 frontmatter"功能
-- **v1.1** — 移除对 karpathy `videos.db` 的依赖，改用项目自有 `compile_db.json`
+- **v1.1** — 移除对 karpathy `videos.db` 的依赖，保留对 `compile_db.json` 的兼容写回
 - **v1.0** — 初始发布：单视频 / UP 主空间 / 收藏夹三种模式
 
 ---

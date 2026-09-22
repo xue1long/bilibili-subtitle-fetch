@@ -171,7 +171,8 @@ class FailurePersistenceTest(unittest.TestCase):
     def test_exception_after_observed_rate_limit_preserves_probe_precedence(self):
         with tempfile.TemporaryDirectory() as directory:
             extractor = SubtitleExtractor(
-                output_dir=Path(directory), enrich_with_meta=False, browser="edge"
+                output_dir=Path(directory), enrich_with_meta=False, browser="edge",
+                backend="selenium",
             )
             driver = type("Driver", (), {
                 "get": lambda self, url: None,
@@ -197,7 +198,8 @@ class FailurePersistenceTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             output_dir = Path(directory)
             extractor = SubtitleExtractor(
-                output_dir=output_dir, enrich_with_meta=False, browser="edge"
+                output_dir=output_dir, enrich_with_meta=False, browser="edge",
+                backend="selenium",
             )
             observed = {
                 "request_observed": True,

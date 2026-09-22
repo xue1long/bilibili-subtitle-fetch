@@ -45,8 +45,4 @@ def chrome_profile_dir() -> Path:
     override = os.environ.get("BILIBILI_SFETCH_CHROME_PROFILE")
     if override:
         return Path(override).expanduser()
-
-    local_app_data = os.environ.get("LOCALAPPDATA")
-    if local_app_data:
-        return Path(local_app_data) / "Google" / "Chrome" / "User Data"
-    return Path.home() / "AppData" / "Local" / "Google" / "Chrome" / "User Data"
+    return project_root() / ".chrome-bilibili"

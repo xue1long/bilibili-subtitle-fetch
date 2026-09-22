@@ -1,0 +1,13 @@
+# bilibili-subtitle-fetch 依赖清单
+# 生成日期: 2026-09-22
+# 默认字幕抓取后端
+playwright>=1.40
+# Selenium 兼容回退（可选，--backend selenium）
+selenium
+webdriver-manager
+# UP 主空间模式 (yt-dlp 提取空间 BV 号)
+yt-dlp
+# 音频 ASR 救援模式 (faster-whisper 本地转录)
+faster-whisper
+# 测试 (AGENT.md: pytest -q)
+pytest

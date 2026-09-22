@@ -44,7 +44,7 @@ class BrowserLifecycleTest(unittest.TestCase):
     def make_extractor(self, directory, **kwargs):
         return SubtitleExtractor(
             output_dir=Path(directory), enrich_with_meta=False,
-            min_delay=0, max_delay=0, **kwargs,
+            backend="selenium", min_delay=0, max_delay=0, **kwargs,
         )
 
     def test_reuse_mode_starts_one_driver_and_quits_once(self):

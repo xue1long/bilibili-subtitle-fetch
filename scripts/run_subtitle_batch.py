@@ -1,11 +1,7 @@
-"""批量下载 B 站 AI 字幕（in-process 调用本 skill 的 subtitle_extractor）。
+"""批量下载 B 站 AI 字幕（in-process 调用统一的 subtitle_extractor）。
 
-【为什么 in-process】
-原 skill 用 webdriver.Edge() 直接起 driver，但受限网络下 msedgedriver CDN
-被挡、SeleniumManager 下载不到驱动。
-本脚本先调 _driver_patch.patch_selenium_edge() 把 selenium.webdriver.Edge
-换成「本地 chromedriver + Playwright chromium」组合，然后 in-process
-import subtitle_extractor 并对每个 BV 调 extract_single。
+默认使用 Playwright；保留 _driver_patch 仅为显式 Selenium 兼容场景提供本地
+ChromeDriver 回退，然后逐个 BV 调用 extract_single。
 
 【输入输出】
 输入: BV 号 JSON（fetch_search_bvids.py 的产物）
@@ -44,7 +40,7 @@ DEFAULT_BROWSER = "chrome"
 
 
 def load_skill_module():
-    """import skill 的 subtitle_extractor（已 patch 过 selenium）。"""
+    """导入本仓库的 subtitle_extractor。"""
     if SKILL_DIR.as_posix() not in sys.path:
         sys.path.insert(0, SKILL_DIR.as_posix())
     return __import__(SKILL_MODULE)
@@ -83,6 +79,7 @@ def main() -> int:
     parser.add_argument("bvids_json", nargs="?", type=Path, default=DEFAULT_BVIDS_JSON)
     parser.add_argument("output_dir", nargs="?", type=Path, default=DEFAULT_OUTPUT_DIR)
     parser.add_argument("browser", nargs="?", choices=("edge", "chrome"), default=DEFAULT_BROWSER)
+    parser.add_argument("--backend", choices=("playwright", "selenium"), default="playwright")
     parser.add_argument("--min-delay", type=float, default=8)
     parser.add_argument("--max-delay", type=float, default=15)
     parser.add_argument("--rate-limit-threshold", type=int, default=2)
@@ -108,20 +105,21 @@ def main() -> int:
     print(
         f"[start] {len(videos)} videos, output={output_dir}, browser={browser}"
     )
-    print("[info] patch + skill import...")
+    print("[info] compatibility patch + extractor import...")
 
-    # 1. patch selenium only when both local executables are configured
+    # Selenium 兼容回退：默认 Playwright 不依赖此 patch。
     if patch_selenium_edge():
         print("[info] local Chrome driver patch enabled")
     else:
         print(f"[info] using Selenium Manager for {browser.title()}")
-    # 2. 加载 skill
+    # 加载统一提取器
     se = load_skill_module()
     # 3. 构造 extractor
     extractor = se.SubtitleExtractor(
         output_dir=output_dir,
         enrich_with_meta=False,  # 与本项目 10_raw/ 现有 .txt 风格一致（无 frontmatter）
         browser=browser,
+        backend=args.backend,
         reuse_browser=True,
         min_delay=args.min_delay,
         max_delay=args.max_delay,

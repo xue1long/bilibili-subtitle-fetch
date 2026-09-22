@@ -1,7 +1,4 @@
-"""B站AI字幕提取器 - 支持单视频、UP主空间、收藏夹三种模式
-
-使用 Selenium + JS Hook 拦截技术（与B站浏览器扩展相同）
-"""
+"""B站 AI 字幕提取器，支持 Playwright 主流程和 Selenium 兼容回退。"""
 import os
 import sys
 import re
@@ -147,7 +144,7 @@ class SubtitleExtractor:
         self.enrich_with_meta = enrich_with_meta
         # 🆕 浏览器选择（默认 chrome；支持 edge / chrome）
         self.browser = browser.lower()
-        self.backend = (backend or os.environ.get("BILIBILI_BROWSER_BACKEND", "selenium")).lower()
+        self.backend = (backend or os.environ.get("BILIBILI_BROWSER_BACKEND", "playwright")).lower()
         self.asr_fallback = asr_fallback
         self.asr_model = asr_model
         self.close_browser = close_browser
@@ -188,8 +185,7 @@ class SubtitleExtractor:
         self._close_driver()
 
     async def _extract_single_playwright_async(self, bvid: str) -> Optional[str]:
-        profile = os.environ.get("BILIBILI_SFETCH_CHROME_PROFILE")
-        profile_dir = Path(profile) if profile else self.output_dir.parent.parent / ".chrome-bilibili"
+        profile_dir = chrome_profile_dir()
         from backends.playwright_subtitle import extract
         from playwright.async_api import async_playwright
         async with async_playwright() as p:
@@ -203,9 +199,9 @@ class SubtitleExtractor:
         if not self.save_srt(result.body, str(output_path)):
             return None
         if self.enrich_with_meta:
-            # Playwright backend closes its page before returning; use the
-            # bundled metadata extractor as a best-effort second request.
-            self._enrich_with_meta(output_path, bvid)
+            # Playwright backend 已在 page 关闭前把 __INITIAL_STATE__ 随结果带回，
+            # 直接用浏览器内 state 做 enrichment（带登录态，无 412 风险）。
+            self._enrich_with_meta(output_path, bvid, state=result.meta_state)
         self._update_db_subtitle_path(bvid, str(output_path))
         self._update_download_list(bvid, "success", str(output_path), duration_sec=round(time.monotonic() - self._started_at, 3))
         self.breaker.reset()
@@ -647,7 +643,7 @@ class SubtitleExtractor:
         except Exception as e:
             print(f"  [wiki DB] 更新失败: {e}")
 
-    def _enrich_with_meta(self, subtitle_path: Path, bvid: str, driver=None) -> None:
+    def _enrich_with_meta(self, subtitle_path: Path, bvid: str, driver=None, state=None) -> None:
         """🆕 v1.3 调用 extract_meta 抓取元数据并拼到字幕顶端
 
         优先从当前 Selenium 页面读取浏览器运行时元数据并直接拼 frontmatter；
@@ -685,13 +681,17 @@ class SubtitleExtractor:
 
         print(f"  [meta] 来源: {meta_source}")
 
-        if driver is not None and bundled_extract.exists():
+        # ---- 浏览器内路径（优先）：Selenium driver 或 Playwright 传入的运行时 state ----
+        # 复用已登录的浏览器会话（带 cookie），无需二次网络请求，规避 B 站对无 cookie
+        # 请求的 HTTP 412 风控（原 Playwright 子进程回退路径的根因）。
+        if (driver is not None or state is not None) and bundled_extract.exists():
             try:
                 from extract_meta import extract_meta_from_state
                 from prepend_meta import prepend_meta
 
                 print(f"  [meta] 从当前浏览器运行时提取 → {bvid}")
-                state = driver.execute_script("return window.__INITIAL_STATE__")
+                if state is None:
+                    state = driver.execute_script("return window.__INITIAL_STATE__")
                 meta_obj = extract_meta_from_state(bvid, state)
                 if not isinstance(meta_obj, dict) or meta_obj.get("error"):
                     print("  [meta] 浏览器页面未返回有效元数据，跳过")

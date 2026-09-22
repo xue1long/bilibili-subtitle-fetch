@@ -11,6 +11,11 @@ from subtitle_extractor import SubtitleExtractor
 
 
 class AsrFallbackTest(unittest.TestCase):
+    def test_default_backend_is_playwright(self):
+        with tempfile.TemporaryDirectory() as directory:
+            extractor = SubtitleExtractor(output_dir=Path(directory), enrich_with_meta=False)
+            self.assertEqual(extractor.backend, "playwright")
+
     def make_extractor(self, directory, enabled=True):
         return SubtitleExtractor(
             output_dir=Path(directory), enrich_with_meta=False,

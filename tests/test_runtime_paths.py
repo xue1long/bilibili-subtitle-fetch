@@ -34,6 +34,14 @@ class RuntimePathsTest(unittest.TestCase):
             else:
                 os.environ["BILIBILI_SFETCH_CHROME_PROFILE"] = old
 
+    def test_chrome_profile_defaults_to_project_profile(self):
+        old = os.environ.pop("BILIBILI_SFETCH_CHROME_PROFILE", None)
+        try:
+            self.assertEqual(runtime_paths.chrome_profile_dir(), Path(__file__).parents[1] / ".chrome-bilibili")
+        finally:
+            if old is not None:
+                os.environ["BILIBILI_SFETCH_CHROME_PROFILE"] = old
+
 
 if __name__ == "__main__":
     unittest.main()
