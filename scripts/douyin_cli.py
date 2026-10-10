@@ -3,7 +3,6 @@
 import argparse
 import os
 import shutil
-import subprocess
 import sys
 import tempfile
 from pathlib import Path
@@ -11,7 +10,7 @@ from pathlib import Path
 from douyin_media import DouyinMediaError, download_video, parse_video_id
 from prepend_meta import prepend_meta
 from runtime_paths import project_root
-from subtitle_rescue import transcribe
+from transcribe_video import VideoTranscriptionError, transcribe_video
 
 
 class DouyinCliError(RuntimeError):
@@ -24,16 +23,6 @@ def _profile_dir() -> Path:
     return Path(os.environ.get("DOUYIN_SFETCH_CHROME_PROFILE", project_root() / ".chrome-douyin"))
 
 
-def _extract_audio(video_path: Path, audio_path: Path) -> None:
-    result = subprocess.run(
-        ["ffmpeg", "-y", "-i", str(video_path), "-vn", "-acodec", "libmp3lame", "-ab", "64k", str(audio_path)],
-        capture_output=True,
-    )
-    if result.returncode:
-        detail = result.stderr.decode(errors="ignore")[-500:]
-        raise DouyinCliError("AUDIO_EXTRACT_FAILED", detail or "ffmpeg 提取音频失败")
-
-
 def run(url: str, output_dir: Path, model_size: str = "small", keep_video: bool = False) -> Path:
     video_id = parse_video_id(url)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -42,7 +31,6 @@ def run(url: str, output_dir: Path, model_size: str = "small", keep_video: bool 
         with tempfile.TemporaryDirectory(prefix=f"douyin-{video_id}-", dir=str(output_dir.parent)) as temp_dir:
             temp = Path(temp_dir)
             video_path = temp / f"DY{video_id}.mp4"
-            audio_path = temp / f"DY{video_id}.mp3"
             try:
                 metadata = download_video(url, video_path, _profile_dir())
             except DouyinMediaError as exc:
@@ -50,11 +38,10 @@ def run(url: str, output_dir: Path, model_size: str = "small", keep_video: bool 
             except Exception as exc:
                 raise DouyinCliError("VIDEO_DOWNLOAD_FAILED", str(exc)) from exc
 
-            _extract_audio(video_path, audio_path)
             try:
-                srt = transcribe(audio_path, model_size=model_size)
-            except Exception as exc:
-                raise DouyinCliError("ASR_FAILED", str(exc)) from exc
+                srt = transcribe_video(video_path, model_size=model_size)
+            except VideoTranscriptionError as exc:
+                raise DouyinCliError(exc.code, str(exc)) from exc
 
             metadata = {**metadata, "platform": "douyin", "video_id": str(metadata.get("video_id", video_id))}
             metadata.setdefault("url", f"https://www.douyin.com/video/{video_id}")

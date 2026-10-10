@@ -2,7 +2,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
@@ -28,9 +27,8 @@ class DouyinCliTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                with patch.object(douyin_cli.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr=b"")):
-                    with patch.object(douyin_cli, "transcribe", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
-                        output = douyin_cli.run(URL, Path(directory), model_size="small")
+                with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                    output = douyin_cli.run(URL, Path(directory), model_size="small")
 
             content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "DY123456.md")
@@ -45,10 +43,9 @@ class DouyinCliTest(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                with patch.object(douyin_cli.subprocess, "run", return_value=SimpleNamespace(returncode=0, stderr=b"")):
-                    with patch.object(douyin_cli, "transcribe", side_effect=RuntimeError("ASR failed")):
-                        with self.assertRaises(douyin_cli.DouyinCliError):
-                            douyin_cli.run(URL, Path(directory))
+                with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
+                    with self.assertRaises(douyin_cli.DouyinCliError):
+                        douyin_cli.run(URL, Path(directory))
             self.assertFalse((Path(directory) / "DY123456.md").exists())
 
 

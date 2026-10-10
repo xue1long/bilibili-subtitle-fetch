@@ -146,6 +146,15 @@ python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=76
 
 输出默认是 `10_raw/02_抖音视频转录/DY<视频ID>.md`，包含 YAML 元数据和 SRT 字幕；需要保留下载视频时追加 `--keep-video`。匿名解析失败时，可用 `DOUYIN_SFETCH_CHROME_PROFILE` 指向登录 profile。
 
+本地视频也可直接提取音频并转录为同名 `.srt`：
+
+```powershell
+python scripts\transcribe_video.py "D:\videos\clip.mp4"
+python scripts\transcribe_video.py "D:\videos\clip.mp4" --model small --output "D:\transcripts\clip.srt"
+```
+
+该入口需要 `ffmpeg`、`faster-whisper`；已有输出文件需追加 `--overwrite` 才会覆盖。
+
 ### 小红书视频和图文
 
 ```powershell
