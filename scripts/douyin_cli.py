@@ -17,7 +17,8 @@ from douyin_media import (
 )
 from prepend_meta import prepend_meta
 from runtime_paths import project_root, raw_dir, scratch_dir
-from transcribe_video import VideoTranscriptionError, transcribe_video
+from transcribe_video import VideoTranscriptionError
+from video_artifact import build_video_artifact
 
 
 class DouyinCliError(RuntimeError):
@@ -80,15 +81,28 @@ def _run_video_post(url: str, post: dict | None, output_dir: Path, model_size: s
                 raise DouyinCliError("VIDEO_DOWNLOAD_FAILED", str(exc)) from exc
 
             try:
-                srt = transcribe_video(video_path, model_size=model_size)
+                body, extra = build_video_artifact(
+                    video_path,
+                    frames_dir=output_dir / "images" / f"DY{video_id}",
+                    md_dir=output_dir,
+                    model_size=model_size,
+                )
             except VideoTranscriptionError as exc:
                 raise DouyinCliError(exc.code, str(exc)) from exc
+            except Exception as exc:
+                raise DouyinCliError("VIDEO_TRANSCRIPTION_FAILED", str(exc)) from exc
 
             metadata = {**metadata, "platform": "douyin", "video_id": str(metadata.get("video_id", video_id))}
             metadata.setdefault("url", f"https://www.douyin.com/video/{video_id}")
-            metadata["transcript_model"] = model_size
+            metadata.update(extra)
+            if extra.get("frame_count"):
+                frames_dir = output_dir / "images" / f"DY{video_id}"
+                metadata["assets"] = [
+                    f"images/DY{video_id}/{path.name}" for path in sorted(frames_dir.glob("*.webp"))
+                ]
+                metadata["asset_count"] = extra["frame_count"]
             body_path = temp / f"DY{video_id}.md"
-            body_path.write_text(srt, encoding="utf-8")
+            body_path.write_text(body, encoding="utf-8")
             if not prepend_meta(metadata, body_path):
                 raise DouyinCliError("METADATA_PARTIAL", "写入 frontmatter 失败")
             # 暂存区与产物根可能不在同一个盘，os.replace 跨盘会失败
@@ -99,9 +113,11 @@ def _run_video_post(url: str, post: dict | None, output_dir: Path, model_size: s
                 shutil.copy2(video_path, kept_dir / f"DY{video_id}.mp4")
     except DouyinCliError:
         output_path.unlink(missing_ok=True)
+        shutil.rmtree(output_dir / "images" / f"DY{video_id}", ignore_errors=True)
         raise
     except Exception as exc:
         output_path.unlink(missing_ok=True)
+        shutil.rmtree(output_dir / "images" / f"DY{video_id}", ignore_errors=True)
         raise DouyinCliError("VIDEO_DOWNLOAD_FAILED", str(exc)) from exc
     return output_path
 

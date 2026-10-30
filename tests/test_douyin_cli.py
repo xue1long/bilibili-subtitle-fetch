@@ -7,6 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 import douyin_cli
+import video_artifact
 
 
 URL = "https://www.douyin.com/user/self?modal_id=123456&showTab=favorite_collection"
@@ -40,10 +41,24 @@ IMAGE_POST = {
 }
 
 
+def _write_tiny_video(path: Path, with_audio: bool = True) -> None:
+    """造一段 1 秒的真视频，ffprobe/ffmpeg 能正常读。"""
+    import subprocess
+
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration=1"]
+    if with_audio:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono:d=1"]
+    cmd += ["-pix_fmt", "yuv420p"]
+    if with_audio:
+        cmd += ["-shortest"]
+    cmd.append(str(path))
+    subprocess.run(cmd, capture_output=True, check=True)
+
+
 class DouyinCliTest(unittest.TestCase):
     def test_run_writes_metadata_before_srt(self):
         def fake_download(url, video_path, profile_dir, post=None):
-            video_path.write_bytes(b"video")
+            _write_tiny_video(video_path, with_audio=True)
             return {
                 "platform": "douyin",
                 "video_id": "123456",
@@ -58,7 +73,7 @@ class DouyinCliTest(unittest.TestCase):
             with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
                 with patch.object(douyin_cli, "scratch_dir", return_value=scratch):
                     with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                        with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                        with patch.object(video_artifact, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
                             output = douyin_cli.run(URL, Path(directory), model_size="small")
 
             content = output.read_text(encoding="utf-8")
@@ -73,7 +88,7 @@ class DouyinCliTest(unittest.TestCase):
 
     def test_failed_asr_does_not_leave_markdown(self):
         def fake_download(url, video_path, profile_dir, post=None):
-            video_path.write_bytes(b"video")
+            _write_tiny_video(video_path, with_audio=True)
             return {"video_id": "123456", "platform": "douyin"}
 
         with tempfile.TemporaryDirectory() as directory:
@@ -81,7 +96,7 @@ class DouyinCliTest(unittest.TestCase):
             with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
                 with patch.object(douyin_cli, "scratch_dir", return_value=scratch):
                     with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                        with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
+                        with patch.object(video_artifact, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
                             with self.assertRaises(douyin_cli.DouyinCliError):
                                 douyin_cli.run(URL, Path(directory))
             self.assertFalse((Path(directory) / "DY123456.md").exists())
@@ -98,7 +113,7 @@ class DouyinCliTest(unittest.TestCase):
             images_dir = Path(directory) / "05_抖音笔记图片"
             with patch.object(douyin_cli, "resolve_post", return_value=IMAGE_POST):
                 with patch.object(douyin_cli, "download_images", side_effect=fake_download_images):
-                    with patch.object(douyin_cli, "transcribe_video") as transcribe:
+                    with patch.object(video_artifact, "transcribe_video") as transcribe:
                         output = douyin_cli.run(URL, Path(directory), image_output_dir=images_dir)
 
             transcribe.assert_not_called()

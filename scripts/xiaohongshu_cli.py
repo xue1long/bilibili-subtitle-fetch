@@ -9,7 +9,8 @@ from pathlib import Path
 
 from prepend_meta import prepend_meta
 from runtime_paths import project_root, raw_dir, scratch_dir
-from transcribe_video import VideoTranscriptionError, transcribe_video
+from transcribe_video import VideoTranscriptionError
+from video_artifact import build_video_artifact
 from xiaohongshu_media import (
     XiaohongshuError,
     discover_note,
@@ -36,12 +37,17 @@ def _note_body(note_type: str | None, asset_files: list[str]) -> str:
     return "\n\n".join(f"![图 {index}]({name})" for index, name in enumerate(asset_files, 1)) + "\n"
 
 
-def _transcribe_video_note(url: str, note: dict, video_url: str, model_size: str) -> tuple[str, dict]:
-    """视频笔记：视频落本地暂存区 → 转录 → 删除视频，产物根只留文本。"""
+def _transcribe_video_note(url: str, note: dict, video_url: str, model_size: str, work_dir: Path) -> tuple[str, dict]:
+    """视频笔记：视频落本地暂存区 → 转录（无语音则抽帧）→ 删除视频，产物根只留文本与图片。"""
     scratch = scratch_dir()
     video_path = download_video_asset(video_url, note, scratch)
     try:
-        return transcribe_video(video_path, model_size=model_size), {"transcript_model": model_size}
+        return build_video_artifact(
+            video_path,
+            frames_dir=work_dir / "images",
+            md_dir=work_dir,
+            model_size=model_size,
+        )
     except VideoTranscriptionError as exc:
         raise XiaohongshuCliError(exc.code, str(exc)) from exc
     finally:
@@ -63,9 +69,12 @@ def run(url: str, output_dir: Path, overwrite: bool = False, model_size: str = "
                 if final_dir.exists() and not overwrite:
                     raise XiaohongshuCliError("OUTPUT_EXISTS", f"输出目录已存在: {final_dir}")
                 if video_url:
-                    body, extra = _transcribe_video_note(url, metadata, video_url, model_size)
+                    body, extra = _transcribe_video_note(url, metadata, video_url, model_size, work_dir)
                     downloaded = {"asset_count": 0, "asset_files": []}
                     metadata.update(extra)
+                    if extra.get("frame_count"):
+                        metadata["assets"] = [f"images/{name}" for name in sorted(p.name for p in (work_dir / "images").glob("*.webp"))]
+                        metadata["asset_count"] = extra["frame_count"]
                 else:
                     downloaded = download_assets(metadata, image_urls, work_dir)
                     body = _note_body(metadata.get("note_type"), downloaded["asset_files"])

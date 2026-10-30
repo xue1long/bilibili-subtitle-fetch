@@ -6,11 +6,26 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
+import video_artifact
 import xiaohongshu_cli
 
 
 VIDEO_URL = "https://www.xiaohongshu.com/explore/6aabba200000000025034beb?xsec_token=secret"
 IMAGE_URL = "https://www.xiaohongshu.com/explore/6aa540d0000000002902d565?xsec_token=secret"
+
+
+def _write_tiny_video(path: Path, with_audio: bool = True) -> None:
+    """造一段 1 秒的真视频，ffprobe/ffmpeg 能正常读。"""
+    import subprocess
+
+    cmd = ["ffmpeg", "-y", "-f", "lavfi", "-i", "testsrc=size=160x120:rate=5:duration=1"]
+    if with_audio:
+        cmd += ["-f", "lavfi", "-i", "anullsrc=r=8000:cl=mono:d=1"]
+    cmd += ["-pix_fmt", "yuv420p"]
+    if with_audio:
+        cmd += ["-shortest"]
+    cmd.append(str(path))
+    subprocess.run(cmd, capture_output=True, check=True)
 
 
 class XiaohongshuCliTest(unittest.TestCase):
@@ -21,7 +36,7 @@ class XiaohongshuCliTest(unittest.TestCase):
         def fake_download_video_asset(video_url, note, scratch):
             scratch.mkdir(parents=True, exist_ok=True)
             path = scratch / "video.mp4"
-            path.write_bytes(b"video")
+            _write_tiny_video(path, with_audio=True)
             return path
 
         with tempfile.TemporaryDirectory() as directory:
@@ -29,7 +44,7 @@ class XiaohongshuCliTest(unittest.TestCase):
             with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
                 with patch.object(xiaohongshu_cli, "download_video_asset", side_effect=fake_download_video_asset):
                     with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
-                        with patch.object(xiaohongshu_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                        with patch.object(video_artifact, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
                             output = xiaohongshu_cli.run(VIDEO_URL, Path(directory))
 
             content = output.read_text(encoding="utf-8")
@@ -50,7 +65,7 @@ class XiaohongshuCliTest(unittest.TestCase):
         def fake_download_video_asset(video_url, note, scratch):
             scratch.mkdir(parents=True, exist_ok=True)
             path = scratch / "video.mp4"
-            path.write_bytes(b"video")
+            _write_tiny_video(path, with_audio=True)
             return path
 
         with tempfile.TemporaryDirectory() as directory:
@@ -58,7 +73,7 @@ class XiaohongshuCliTest(unittest.TestCase):
             with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
                 with patch.object(xiaohongshu_cli, "download_video_asset", side_effect=fake_download_video_asset):
                     with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
-                        with patch.object(xiaohongshu_cli, "transcribe_video", side_effect=xiaohongshu_cli.VideoTranscriptionError("ASR_FAILED", "boom")):
+                        with patch.object(video_artifact, "transcribe_video", side_effect=xiaohongshu_cli.VideoTranscriptionError("ASR_FAILED", "boom")):
                             with self.assertRaises(xiaohongshu_cli.XiaohongshuCliError):
                                 xiaohongshu_cli.run(VIDEO_URL, Path(directory))
             # 失败也要清掉暂存的视频

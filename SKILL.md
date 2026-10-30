@@ -93,6 +93,8 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/video/768755985877935
 
 **视频笔记不保存视频文件。** 视频只落在项目本地的媒体暂存区 `.scratch/`，ASR 转录成功后立即删除，产物根里不留任何 `.mp4`——产物根可能在同步盘上，媒体进去会被完整上传一遍再删除。视频笔记的产物形态与抖音、B站一致：正文是语音转录文本，带 `transcript_model`。已存在的旧笔记不回填正文，只对新下载的笔记生效。
 
+**无语音的视频改为抽关键帧。** 没有音频轨的视频不能进 ASR（ffmpeg 抽音频那步就会失败），识别不出内容时也按无语音处理。此时每 2 秒抽 1 帧（缩到 540 宽 webp，最多 24 帧）存进产物根的 `images/`，正文写成帧图引用并注明原因；视频照旧删除。这样内容不会丢，形态与图文笔记一致。
+
 ```powershell
 python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
