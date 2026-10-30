@@ -22,6 +22,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
+from html import escape as html_escape
 from urllib.parse import quote
 
 from runtime_paths import raw_dir
@@ -680,7 +681,8 @@ def render_html(items: list[dict], meta: dict, out_path: Path) -> Path:
     payload = json.dumps({"items": items, "meta": meta}, ensure_ascii=False, separators=(",", ":"))
     payload = payload.replace("</", "<\\/")  # 防止 </script> 提前闭合
     html = HTML_TEMPLATE.replace("/*__DATA__*/", payload)
-    html = html.replace("<code>产物根/</code>", f"<code>{quote(str(raw_dir()).replace(chr(92), '/'))}</code>")
+    raw_label = html_escape(str(raw_dir()).replace("\\", "/"))
+    html = html.replace("<code>产物根/</code>", f"<code>{raw_label}</code>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(html, encoding="utf-8")
     return out_path
