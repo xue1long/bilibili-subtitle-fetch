@@ -119,6 +119,28 @@ python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<�
 
 不要试图复用用户日常 Chrome 的登录态：Chrome 运行时会把 `Default/Network/Cookies` 独占锁住，`shutil.copy2` 报 PermissionError、SQLite 读不了、`esentutl` 报 `JET_errFileAccessDenied(-1032)`。CDP 通道用项目自己的 `.chrome-xiaohongshu` profile 即可。
 
+## 补跑本地已有视频
+
+`video_artifact.py` 从**本地视频**起步（而不是重新下载），把「已下载但当时没转成」的存量补成合规产物：有语音走 ASR，无语音抽关键帧，产出 markdown 后删除源视频。
+
+```powershell
+# 补跑一个目录下的全部 mp4，产物扁平写回同一目录（旧格式存量用 --flat）
+python scripts\video_artifact.py --from-dir "10_raw\02_抖音视频笔记" `
+  --output-dir "10_raw\02_抖音视频笔记" --flat --platform douyin `
+  --manifest "data\platform_videos_manifest.json"
+
+# 先看会发生什么，不改动
+python scripts\video_artifact.py --from-dir <目录> --output-dir <目录> --dry-run
+```
+
+要点：
+
+- 产物 ID 取视频文件名（`12345.mp4` → `12345.md`）；默认目录式 `<目录>/<id>/<id>.md`，`--flat` 则平铺成 `<目录>/<id>.md`
+- **源视频默认删除**（兑现「视频是中间产物」），要保留加 `--keep-video`
+- 已有产物默认跳过，`--overwrite` 才覆盖；空文件与 0 字节文件自动跳过
+- `--manifest` 指向 platform manifest 时会自动补齐 title/uploader 等 frontmatter 字段；`--metadata` 可再覆盖
+- 只转录音频、或只抽帧，都不需要重新下载，也不碰 Cookie 与风控
+
 ## 元数据流水线
 
 元数据（标题、UP主、发布时间、下载时间）走独立流水线，与字幕抓取解耦：

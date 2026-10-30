@@ -5,9 +5,12 @@
 帧是可以进产物根的，内容因此不丢，形态与图文笔记一致。
 """
 
+import argparse
+import json
 import os
 import re
 import subprocess
+import sys
 from pathlib import Path
 
 from transcribe_video import transcribe_video
@@ -169,3 +172,176 @@ def build_video_artifact(
         + "\n"
     )
     return body, {"frame_count": len(frames), "frame_interval": interval, "speech": "none"}
+
+
+# ---------------------------------------------------------------------------
+# CLI：把**本地已有**的视频变成合规产物
+#
+# 下载型的入口（douyin_cli / xiaohongshu_cli）从 URL 起步，本命令从本地视频
+# 起步 —— 用于补跑那些「视频已下载但当时没转成」的存量。
+# ---------------------------------------------------------------------------
+
+
+def artifact_paths(output_dir: Path, note_id: str, flat: bool) -> tuple[Path, Path]:
+    """返回 (markdown 路径, 关键帧目录)。
+
+    目录式（默认，与当前代码产出一致）::
+
+        <output_dir>/<id>/<id>.md
+        <output_dir>/<id>/images/*.webp
+
+    扁平式（``--flat``，用于补跑旧格式存量）::
+
+        <output_dir>/<id>.md
+        <output_dir>/images/<id>/*.webp
+    """
+    if flat:
+        return output_dir / f"{note_id}.md", output_dir / "images" / note_id
+    return output_dir / note_id / f"{note_id}.md", output_dir / note_id / "images"
+
+
+def _load_manifest(path: Path) -> dict:
+    """读取 platform manifest，按 video_id 索引。读不到就返回空表。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {}
+    sources = data.get("sources")
+    if not isinstance(sources, dict):
+        return {}
+    return sources
+
+
+def _metadata_for(note_id: str, args, extra: dict, manifest: dict) -> dict:
+    """组装 frontmatter 元数据。
+
+    优先级：``--metadata`` 显式给的 > manifest 里登记的 > CLI 参数推导的。
+    """
+    meta: dict = {}
+    record = manifest.get(args.platform, {}).get(note_id)
+    if isinstance(record, dict):
+        meta.update({k: v for k, v in record.items() if k not in ("video_id", "note_id")})
+    meta.update(args.metadata or {})
+
+    if args.platform == "xiaohongshu":
+        meta["note_id"] = note_id
+    else:
+        meta["video_id"] = note_id
+    meta.setdefault("platform", args.platform)
+    if not meta.get("url") and args.source_url:
+        meta["url"] = args.source_url
+    if extra.get("transcript_model"):
+        meta["transcript_model"] = extra["transcript_model"]
+    if extra.get("frame_count"):
+        meta["asset_count"] = extra["frame_count"]
+    if extra.get("assets"):
+        meta["assets"] = extra["assets"]
+    return meta
+
+
+def _asset_paths(frames_dir: Path, md_path: Path) -> list[str]:
+    """关键帧相对 markdown 所在目录的路径列表。"""
+    base = md_path.parent
+    return [
+        os.path.relpath(frame, base).replace("\\", "/")
+        for frame in sorted(frames_dir.glob("*.webp"))
+    ]
+
+
+def build_one(video_path: Path, output_dir: Path, args, manifest: dict) -> Path:
+    """处理一个本地视频，返回产出的 markdown 路径。"""
+    note_id = video_path.stem
+    md_path, frames_dir = artifact_paths(output_dir, note_id, args.flat)
+    md_path.parent.mkdir(parents=True, exist_ok=True)
+
+    body, extra = build_video_artifact(
+        video_path,
+        frames_dir=frames_dir,
+        md_dir=md_path.parent,
+        model_size=args.model,
+    )
+    if extra.get("frame_count"):
+        extra["assets"] = _asset_paths(frames_dir, md_path)
+
+    md_path.write_text(body, encoding="utf-8")
+    from prepend_meta import prepend_meta
+
+    metadata = _metadata_for(note_id, args, extra, manifest)
+    if not prepend_meta(metadata, md_path):
+        raise RuntimeError(f"写入 frontmatter 失败: {md_path}")
+
+    if not args.keep_video:
+        video_path.unlink(missing_ok=True)
+    return md_path
+
+
+def collect_videos(args) -> list[Path]:
+    """待处理的视频列表：``--video`` 显式给的 + ``--from-dir`` 扫到的。"""
+    videos = [Path(v) for v in (args.video or [])]
+    if args.from_dir:
+        directory = Path(args.from_dir)
+        videos.extend(sorted(directory.glob("*.mp4")))
+    return videos
+
+
+def main(argv=None) -> int:
+    parser = argparse.ArgumentParser(
+        description="把本地已有的视频转成产物：有语音走 ASR，无语音抽关键帧")
+    parser.add_argument("--video", action="append",
+                        help="本地视频路径，可重复；产物 ID 取文件名")
+    parser.add_argument("--from-dir", type=Path,
+                        help="扫描该目录下的 *.mp4 批量处理")
+    parser.add_argument("--output-dir", "-o", type=Path, required=True,
+                        help="产物目录")
+    parser.add_argument("--platform", default="douyin",
+                        help="frontmatter 的 platform 字段，默认 douyin")
+    parser.add_argument("--model", default="small", help="ASR 模型，默认 small")
+    parser.add_argument("--metadata", type=json.loads,
+                        help="额外元数据 JSON，覆盖 manifest 里的同名字段")
+    parser.add_argument("--manifest", type=Path,
+                        help="platform manifest 路径，用于补齐 title/uploader 等")
+    parser.add_argument("--source-url", help="产物 frontmatter 里的 url")
+    parser.add_argument("--flat", action="store_true",
+                        help="扁平布局（<id>.md 平铺），用于补跑旧格式存量")
+    parser.add_argument("--keep-video", action="store_true",
+                        help="保留源视频（默认按「视频是中间产物」删除）")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="覆盖已有产物；默认已有产物则跳过")
+    parser.add_argument("--dry-run", action="store_true", help="只报告，不改动")
+    args = parser.parse_args(argv)
+
+    videos = collect_videos(args)
+    if not videos:
+        print("没有待处理的视频（用 --video 或 --from-dir 指定）", file=sys.stderr)
+        return 2
+
+    manifest = _load_manifest(args.manifest) if args.manifest else {}
+    done = skipped = failed = 0
+    for video in videos:
+        if not video.is_file() or video.stat().st_size == 0:
+            print(f"[skip] {video.name}: 文件不存在或为空")
+            skipped += 1
+            continue
+        md_path, _ = artifact_paths(args.output_dir, video.stem, args.flat)
+        if md_path.exists() and not args.overwrite:
+            print(f"[skip] {video.name}: 产物已存在（{md_path.name}）")
+            skipped += 1
+            continue
+        if args.dry_run:
+            print(f"[dry-run] {video.name} -> {md_path}")
+            continue
+        try:
+            produced = build_one(video, args.output_dir, args, manifest)
+        except Exception as exc:
+            failed += 1
+            print(f"[fail] {video.name}: {exc}", file=sys.stderr)
+            continue
+        done += 1
+        print(f"[ok] {video.name} -> {produced}")
+
+    print(f"完成 {done} 个，跳过 {skipped} 个，失败 {failed} 个")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

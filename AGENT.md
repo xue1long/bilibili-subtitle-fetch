@@ -11,6 +11,7 @@
 - `scripts/douyin_cli.py`：抖音单条下载，视频走音频提取 + faster-whisper 转录，图文走图片下载 + 元数据清单。
 - `scripts/xiaohongshu_cli.py`：小红书单条视频/图文下载和元数据清单。
 - `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
+- `scripts/video_artifact.py`：把**本地已有**的视频变成合规产物（有语音走 ASR，无语音抽关键帧），产出 markdown 并删除源视频。
 - `scripts/sources/`：视频来源适配器。
 - `scripts/pipeline/`：任务模型和去重规划。
 - `scripts/backends/`：Playwright 字幕与 ASR 后端。
