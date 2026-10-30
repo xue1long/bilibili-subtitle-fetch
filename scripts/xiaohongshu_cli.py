@@ -8,8 +8,15 @@ import tempfile
 from pathlib import Path
 
 from prepend_meta import prepend_meta
-from runtime_paths import project_root, raw_dir
-from xiaohongshu_media import XiaohongshuError, discover_note, download_assets, parse_note_id
+from runtime_paths import project_root, raw_dir, scratch_dir
+from transcribe_video import VideoTranscriptionError, transcribe_video
+from xiaohongshu_media import (
+    XiaohongshuError,
+    discover_note,
+    download_assets,
+    download_video_asset,
+    parse_note_id,
+)
 
 
 class XiaohongshuCliError(RuntimeError):
@@ -23,15 +30,25 @@ def _profile_dir() -> Path:
 
 
 def _note_body(note_type: str | None, asset_files: list[str]) -> str:
-    """正文写资源引用，让 Obsidian 等阅读器能直接看到图、播视频。"""
+    """正文写资源引用，让 Obsidian 等阅读器能直接看到图。"""
     if not asset_files:
         return ""
-    if note_type == "video":
-        return f"[视频]({asset_files[0]})\n"
     return "\n\n".join(f"![图 {index}]({name})" for index, name in enumerate(asset_files, 1)) + "\n"
 
 
-def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
+def _transcribe_video_note(url: str, note: dict, video_url: str, model_size: str) -> tuple[str, dict]:
+    """视频笔记：视频落本地暂存区 → 转录 → 删除视频，产物根只留文本。"""
+    scratch = scratch_dir()
+    video_path = download_video_asset(video_url, note, scratch)
+    try:
+        return transcribe_video(video_path, model_size=model_size), {"transcript_model": model_size}
+    except VideoTranscriptionError as exc:
+        raise XiaohongshuCliError(exc.code, str(exc)) from exc
+    finally:
+        video_path.unlink(missing_ok=True)
+
+
+def run(url: str, output_dir: Path, overwrite: bool = False, model_size: str = "small") -> Path:
     parse_note_id(url)
     output_dir.mkdir(parents=True, exist_ok=True)
     final_dir = None
@@ -45,7 +62,14 @@ def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
                 final_dir = output_dir / note_id
                 if final_dir.exists() and not overwrite:
                     raise XiaohongshuCliError("OUTPUT_EXISTS", f"输出目录已存在: {final_dir}")
-                downloaded = download_assets(metadata, video_url, image_urls, work_dir)
+                if video_url:
+                    body, extra = _transcribe_video_note(url, metadata, video_url, model_size)
+                    downloaded = {"asset_count": 0, "asset_files": []}
+                    metadata.update(extra)
+                else:
+                    downloaded = download_assets(metadata, image_urls, work_dir)
+                    body = _note_body(metadata.get("note_type"), downloaded["asset_files"])
+                work_dir.mkdir(parents=True, exist_ok=True)
             except XiaohongshuCliError:
                 raise
             except XiaohongshuError as exc:
@@ -53,14 +77,16 @@ def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
             except Exception as exc:
                 raise XiaohongshuCliError("ASSET_DOWNLOAD_FAILED", str(exc)) from exc
 
-            metadata = {**metadata, **downloaded, "assets": downloaded["asset_files"]}
+            if downloaded["asset_files"]:
+                metadata = {**metadata, **downloaded, "assets": downloaded["asset_files"]}
             body_path = work_dir / f"{note_id}.md"
-            body_path.write_text(_note_body(metadata.get("note_type"), downloaded["asset_files"]), encoding="utf-8")
+            body_path.write_text(body, encoding="utf-8")
             if not prepend_meta(metadata, body_path):
                 raise XiaohongshuCliError("METADATA_PARTIAL", "写入 frontmatter 失败")
             if final_dir and final_dir.exists():
                 shutil.rmtree(final_dir)
-            work_dir.replace(final_dir)
+            # 暂存区与产物根可能不在同一个盘，os.replace 跨盘会失败
+            shutil.move(str(work_dir), str(final_dir))
     except XiaohongshuCliError:
         raise
     except Exception as exc:
@@ -72,10 +98,11 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="下载一个小红书视频或图文笔记")
     parser.add_argument("--url", required=True)
     parser.add_argument("--output", "-o", type=Path, default=raw_dir() / "03_小红书")
+    parser.add_argument("--model", default="small")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
     try:
-        path = run(args.url, args.output, args.overwrite)
+        path = run(args.url, args.output, args.overwrite, args.model)
     except XiaohongshuCliError as exc:
         print(f"[{exc.code}] {exc}", file=sys.stderr)
         return 1

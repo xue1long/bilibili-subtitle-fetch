@@ -1,6 +1,7 @@
 """Reusable audio-ASR subtitle rescue helpers."""
 
 import asyncio
+import os
 import subprocess
 import urllib.request
 from pathlib import Path
@@ -91,8 +92,20 @@ async def fetch_audio(bvid: str, out_dir: Path, browser: str = "chrome") -> Tupl
     return audio_path, {k: v for k, v in result.items() if k not in ("audioUrl", "fallback")}
 
 
+def _use_offline_hub_if_cached(model_size: str) -> None:
+    """模型已缓存时离线加载。
+
+    faster-whisper 每次都会去 HuggingFace 查最新版本，走代理时常返回 502；
+    模型既然已在本地，就没必要联网。
+    """
+    cache = Path(os.environ.get("HF_HUB_CACHE") or Path.home() / ".cache" / "huggingface" / "hub")
+    if (cache / f"models--Systran--faster-whisper-{model_size}").exists():
+        os.environ.setdefault("HF_HUB_OFFLINE", "1")
+
+
 def transcribe(audio_path: Path, model_size: str = "small", language: Optional[str] = None) -> str:
     from faster_whisper import WhisperModel
+    _use_offline_hub_if_cached(model_size)
     model = WhisperModel(model_size, device="auto", compute_type="auto")
     segments, _ = model.transcribe(str(audio_path), language=language, beam_size=5)
     return format_srt(list(segments))

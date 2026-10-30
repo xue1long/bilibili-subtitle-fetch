@@ -54,16 +54,22 @@ class DouyinCliTest(unittest.TestCase):
             }
 
         with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "scratch"
             with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
-                with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                    with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
-                        output = douyin_cli.run(URL, Path(directory), model_size="small")
+                with patch.object(douyin_cli, "scratch_dir", return_value=scratch):
+                    with patch.object(douyin_cli, "download_video", side_effect=fake_download):
+                        with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                            output = douyin_cli.run(URL, Path(directory), model_size="small")
 
             content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "DY123456.md")
             self.assertLess(content.index("platform: douyin"), content.index("00:00:00,000"))
             self.assertIn("description: |", content)
             self.assertIn("transcript_model: small", content)
+            # 视频不留在产物目录里
+            self.assertFalse((output.parent / "DY123456.mp4").exists())
+            # 暂存区用完即清空
+            self.assertEqual(list(scratch.glob("**/*.mp4")), [])
 
     def test_failed_asr_does_not_leave_markdown(self):
         def fake_download(url, video_path, profile_dir, post=None):
@@ -71,12 +77,16 @@ class DouyinCliTest(unittest.TestCase):
             return {"video_id": "123456", "platform": "douyin"}
 
         with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "scratch"
             with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
-                with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                    with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
-                        with self.assertRaises(douyin_cli.DouyinCliError):
-                            douyin_cli.run(URL, Path(directory))
+                with patch.object(douyin_cli, "scratch_dir", return_value=scratch):
+                    with patch.object(douyin_cli, "download_video", side_effect=fake_download):
+                        with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
+                            with self.assertRaises(douyin_cli.DouyinCliError):
+                                douyin_cli.run(URL, Path(directory))
             self.assertFalse((Path(directory) / "DY123456.md").exists())
+            # 转录失败也要清掉暂存的视频
+            self.assertEqual(list(scratch.glob("**/*.mp4")), [])
 
     def test_image_post_writes_manifest_and_skips_transcription(self):
         def fake_download_images(urls, output_dir, referer=None):

@@ -368,14 +368,28 @@ def _resize_image(path: Path) -> None:
     scaled_path.replace(path)
 
 
-def download_assets(note: dict, video_url: str | None, image_urls: list[str], output_dir: Path) -> dict:
+def download_video_asset(video_url: str, note: dict, scratch: Path) -> Path:
+    """下载视频到媒体暂存区，返回临时文件路径。
+
+    视频是中间产物：调用方转录成功后应删除它。刻意不落在产物根 ——
+    产物根可能在同步盘上，媒体进去会被完整上传一遍再删除。
+    """
+    scratch.mkdir(parents=True, exist_ok=True)
+    path = scratch / "video.mp4.tmp"
+    try:
+        _download_one(video_url, path, note["url"])
+    except Exception:
+        path.unlink(missing_ok=True)
+        raise
+    final_path = scratch / "video.mp4"
+    shutil.move(str(path), str(final_path))
+    return final_path
+
+
+def download_assets(note: dict, image_urls: list[str], output_dir: Path) -> dict:
+    """下载图文笔记的图片到产物根。"""
     output_dir.mkdir(parents=True, exist_ok=True)
     try:
-        if video_url:
-            path = output_dir / "video.mp4.tmp"
-            _download_one(video_url, path, note["url"])
-            path.replace(output_dir / "video.mp4")
-            return {"asset_count": 1, "asset_files": ["video.mp4"]}
         if not image_urls:
             raise XiaohongshuError("ASSET_NOT_FOUND", "没有可下载的图文资源")
         image_dir = output_dir / "images"
@@ -386,7 +400,7 @@ def download_assets(note: dict, video_url: str | None, image_urls: list[str], ou
             _download_one(url, path, note["url"])
             _resize_image(path)
             final_path = image_dir / f"{index:02d}.webp"
-            path.replace(final_path)
+            shutil.move(str(path), str(final_path))
             files.append(str(final_path.relative_to(output_dir)).replace("\\", "/"))
         return {"asset_count": len(files), "asset_files": files}
     except Exception:

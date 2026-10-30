@@ -36,6 +36,15 @@ def raw_dir() -> Path:
     return project_root() / "10_raw"
 
 
+def scratch_dir() -> Path:
+    """媒体暂存区：视频/音频等**中间产物**的落脚点，用完即删。
+
+    刻意放在项目本地而不是产物根 —— 产物根可能在同步盘上，媒体进去会被完整上传
+    一遍再删除，白白吃上行带宽，还可能撞上同步冲突。
+    """
+    return project_root() / ".scratch"
+
+
 def default_output_dir() -> Path:
     return raw_dir() / "01_B站视频转录"
 

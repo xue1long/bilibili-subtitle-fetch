@@ -7,7 +7,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 from pipeline.planner import plan
-from runtime_paths import default_output_dir, project_root, raw_dir
+from runtime_paths import default_output_dir, project_root, raw_dir, scratch_dir
 
 
 class ArtifactRootTest(unittest.TestCase):
@@ -33,6 +33,15 @@ class ArtifactRootTest(unittest.TestCase):
     def test_default_output_dir_follows_raw_dir(self):
         with patch.dict(os.environ, {"BILIBILI_SFETCH_RAW_DIR": "D:/Somewhere/产物根"}):
             self.assertEqual(default_output_dir(), Path("D:/Somewhere/产物根/01_B站视频转录"))
+
+
+class ScratchDirTest(unittest.TestCase):
+    def test_scratch_dir_is_inside_repo_not_raw_dir(self):
+        """媒体暂存区必须在项目本地，不能落在可能位于同步盘的产物根里。"""
+        self.assertEqual(scratch_dir(), project_root() / ".scratch")
+        with patch.dict(os.environ, {"BILIBILI_SFETCH_RAW_DIR": "D:/Somewhere/产物根"}):
+            self.assertNotEqual(scratch_dir(), raw_dir())
+            self.assertTrue(str(scratch_dir()).startswith(str(project_root())))
 
 
 class PlannerArtifactTest(unittest.TestCase):

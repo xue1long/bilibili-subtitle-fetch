@@ -64,6 +64,9 @@ config.json
 .edge-bilibili/
 .playwright-verify/
 
+# 媒体暂存区：视频/音频等中间产物，用完即删
+.scratch/
+
 # Local runtime state
 data/
 se-metadata.json

@@ -14,30 +14,62 @@ IMAGE_URL = "https://www.xiaohongshu.com/explore/6aa540d0000000002902d565?xsec_t
 
 
 class XiaohongshuCliTest(unittest.TestCase):
-    def test_run_video_writes_metadata_and_video(self):
+    def test_run_video_writes_transcript_and_keeps_no_media(self):
         def fake_discover(url, profile_dir):
-            return ({"platform": "xiaohongshu", "note_id": "video1", "title": "视频", "note_type": "video", "asset_count": 1}, "https://cdn/video.mp4", [])
+            return ({"platform": "xiaohongshu", "note_id": "video1", "title": "视频", "note_type": "video"}, "https://cdn/video.mp4", [])
 
-        def fake_download(note, video_url, image_urls, output_dir):
-            output_dir.mkdir(parents=True, exist_ok=True)
-            (output_dir / "video.mp4").write_bytes(b"video")
-            return {"asset_count": 1, "asset_files": ["video.mp4"]}
+        def fake_download_video_asset(video_url, note, scratch):
+            scratch.mkdir(parents=True, exist_ok=True)
+            path = scratch / "video.mp4"
+            path.write_bytes(b"video")
+            return path
 
         with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "scratch"
             with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
-                with patch.object(xiaohongshu_cli, "download_assets", side_effect=fake_download):
-                    output = xiaohongshu_cli.run(VIDEO_URL, Path(directory))
+                with patch.object(xiaohongshu_cli, "download_video_asset", side_effect=fake_download_video_asset):
+                    with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
+                        with patch.object(xiaohongshu_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                            output = xiaohongshu_cli.run(VIDEO_URL, Path(directory))
+
+            content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "video1.md")
-            self.assertIn("note_type: video", output.read_text(encoding="utf-8"))
-            self.assertTrue((output.parent / "video.mp4").exists())
-            # 正文要有资源引用，Obsidian 才能直接看到图/播视频
-            self.assertIn("[视频](video.mp4)", output.read_text(encoding="utf-8"))
+            self.assertIn("note_type: video", content)
+            self.assertIn("transcript_model: small", content)
+            # 正文是转录文本
+            self.assertIn("00:00:00,000", content)
+            # 产物根里不留视频
+            self.assertFalse((output.parent / "video.mp4").exists())
+            # 暂存区的视频已删除
+            self.assertFalse((scratch / "video.mp4").exists())
+
+    def test_run_video_removes_media_when_transcription_fails(self):
+        def fake_discover(url, profile_dir):
+            return ({"platform": "xiaohongshu", "note_id": "video1", "title": "视频", "note_type": "video"}, "https://cdn/video.mp4", [])
+
+        def fake_download_video_asset(video_url, note, scratch):
+            scratch.mkdir(parents=True, exist_ok=True)
+            path = scratch / "video.mp4"
+            path.write_bytes(b"video")
+            return path
+
+        with tempfile.TemporaryDirectory() as directory:
+            scratch = Path(directory) / "scratch"
+            with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
+                with patch.object(xiaohongshu_cli, "download_video_asset", side_effect=fake_download_video_asset):
+                    with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
+                        with patch.object(xiaohongshu_cli, "transcribe_video", side_effect=xiaohongshu_cli.VideoTranscriptionError("ASR_FAILED", "boom")):
+                            with self.assertRaises(xiaohongshu_cli.XiaohongshuCliError):
+                                xiaohongshu_cli.run(VIDEO_URL, Path(directory))
+            # 失败也要清掉暂存的视频
+            self.assertFalse((scratch / "video.mp4").exists())
+            self.assertFalse((Path(directory) / "video1" / "video1.md").exists())
 
     def test_run_image_writes_all_image_paths(self):
         def fake_discover(url, profile_dir):
             return ({"platform": "xiaohongshu", "note_id": "image1", "title": "图文", "note_type": "image", "asset_count": 2}, None, ["https://cdn/01.webp", "https://cdn/02.webp"])
 
-        def fake_download(note, video_url, image_urls, output_dir):
+        def fake_download(note, image_urls, output_dir):
             image_dir = output_dir / "images"
             image_dir.mkdir(parents=True, exist_ok=True)
             for index in range(len(image_urls)):

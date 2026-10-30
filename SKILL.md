@@ -89,7 +89,9 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/video/768755985877935
 - 权威图集是 `window.__INITIAL_STATE__.note.noteDetailMap[<笔记ID>].note.imageList`，DOM 兜底会漏掉懒加载的轮播图（实测只拿到一半）；页面右上角的 `N/M` 计数器就是权威张数，可与 `imageList` 长度交叉核对。
 - `imageList[].urlDefault` 是 `http://` 明文，必须升级成 `https://`，否则 CDN 返回 403。
 
-视频保存为 `video.mp4`，图文保存为按原比例缩小 50% 的 `images/*.webp`，同目录 `<笔记ID>.md` 保存 YAML 元数据、相对资源清单，并在正文写资源引用：图文是 `![图 N](images/01.webp)`，视频是 `[视频](video.mp4)`，Obsidian 直接可看。已存在的旧笔记不回填正文，只对新下载的笔记生效。
+图文笔记保存为按原比例缩小 50% 的 `images/*.webp`，同目录 `<笔记ID>.md` 保存 YAML 元数据、相对资源清单，并在正文写图片引用 `![图 N](images/01.webp)`，Obsidian 直接可看。
+
+**视频笔记不保存视频文件。** 视频只落在项目本地的媒体暂存区 `.scratch/`，ASR 转录成功后立即删除，产物根里不留任何 `.mp4`——产物根可能在同步盘上，媒体进去会被完整上传一遍再删除。视频笔记的产物形态与抖音、B站一致：正文是语音转录文本，带 `transcript_model`。已存在的旧笔记不回填正文，只对新下载的笔记生效。
 
 ```powershell
 python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"

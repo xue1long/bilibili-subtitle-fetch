@@ -16,7 +16,7 @@ from douyin_media import (
     resolve_post,
 )
 from prepend_meta import prepend_meta
-from runtime_paths import project_root, raw_dir
+from runtime_paths import project_root, raw_dir, scratch_dir
 from transcribe_video import VideoTranscriptionError, transcribe_video
 
 
@@ -65,7 +65,11 @@ def _run_video_post(url: str, post: dict | None, output_dir: Path, model_size: s
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"DY{video_id}.md"
     try:
-        with tempfile.TemporaryDirectory(prefix=f"douyin-{video_id}-", dir=str(output_dir.parent)) as temp_dir:
+        # 视频落在项目本地的媒体暂存区，不进产物根 —— 产物根可能在同步盘上，
+        # 媒体进去会被完整上传一遍再删除。
+        scratch = scratch_dir()
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f"douyin-{video_id}-", dir=str(scratch)) as temp_dir:
             temp = Path(temp_dir)
             video_path = temp / f"DY{video_id}.mp4"
             try:
@@ -87,9 +91,12 @@ def _run_video_post(url: str, post: dict | None, output_dir: Path, model_size: s
             body_path.write_text(srt, encoding="utf-8")
             if not prepend_meta(metadata, body_path):
                 raise DouyinCliError("METADATA_PARTIAL", "写入 frontmatter 失败")
-            body_path.replace(output_path)
+            # 暂存区与产物根可能不在同一个盘，os.replace 跨盘会失败
+            shutil.move(str(body_path), str(output_path))
             if keep_video:
-                shutil.copy2(video_path, output_dir / f"DY{video_id}.mp4")
+                kept_dir = scratch_dir() / "kept"
+                kept_dir.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(video_path, kept_dir / f"DY{video_id}.mp4")
     except DouyinCliError:
         output_path.unlink(missing_ok=True)
         raise
