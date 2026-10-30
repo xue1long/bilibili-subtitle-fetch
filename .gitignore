@@ -70,3 +70,12 @@ config.json
 # Local runtime state
 data/
 se-metadata.json
+
+# 本地工作目录与临时产物（脚本草稿、日志、sqlite 残留）
+tmp*/
+
+# 飞书多维表格分页拉取产物（含 base_token 等本地状态）
+page_*.manifest.json
+
+# Agent 工作区数据（本地）
+.workbuddy/
