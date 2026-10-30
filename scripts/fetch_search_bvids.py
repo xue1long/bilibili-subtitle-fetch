@@ -13,7 +13,7 @@
 
 用法:
   python fetch_search_bvids.py [<keyword> <target> <output_dir>]
-  默认 keyword=hyperframes  target=100  output_dir=10_raw/01_B站视频转录
+  默认 keyword=hyperframes  target=100  output_dir=产物根/01_B站视频转录
 """
 import json
 import re
@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# === 默认输出目录：项目根 / 10_raw / 01_B站视频转录 ===
+# === 默认输出目录：产物根 / 01_B站视频转录（产物根可用 BILIBILI_SFETCH_RAW_DIR 改指向）===
 SKILL_DIR = Path(__file__).resolve().parent
 # scripts/ → bilibili-subtitle-fetch/ → skills/ → .claude/ → project_root
 DEFAULT_OUTPUT_DIR = default_output_dir()

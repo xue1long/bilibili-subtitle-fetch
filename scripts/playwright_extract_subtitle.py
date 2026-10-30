@@ -3,11 +3,13 @@ import json
 from pathlib import Path
 from playwright.async_api import async_playwright
 
+from runtime_paths import raw_dir
+
 
 async def main():
     root = Path(__file__).resolve().parents[1]
     profile = root / ".chrome-bilibili"
-    out = root / "10_raw" / "01_B站视频转录" / "BV1vqeF62EQS.md"
+    out = raw_dir() / "01_B站视频转录" / "BV1vqeF62EQS.md"
     captured = []
 
     async with async_playwright() as p:

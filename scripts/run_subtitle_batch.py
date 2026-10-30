@@ -117,7 +117,7 @@ def main() -> int:
     # 3. 构造 extractor
     extractor = se.SubtitleExtractor(
         output_dir=output_dir,
-        enrich_with_meta=False,  # 与本项目 10_raw/ 现有 .txt 风格一致（无 frontmatter）
+        enrich_with_meta=False,  # 与本项目产物根现有 .txt 风格一致（无 frontmatter）
         browser=browser,
         backend=args.backend,
         reuse_browser=True,

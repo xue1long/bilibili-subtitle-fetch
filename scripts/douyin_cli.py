@@ -16,7 +16,7 @@ from douyin_media import (
     resolve_post,
 )
 from prepend_meta import prepend_meta
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 from transcribe_video import VideoTranscriptionError, transcribe_video
 
 
@@ -116,8 +116,8 @@ def run(
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="下载并转录一个抖音视频，或下载一个抖音图文帖")
     parser.add_argument("--url", required=True)
-    parser.add_argument("--output", "-o", type=Path, default=project_root() / "10_raw" / "02_抖音视频转录")
-    parser.add_argument("--image-output", type=Path, default=project_root() / "10_raw" / "05_抖音笔记图片")
+    parser.add_argument("--output", "-o", type=Path, default=raw_dir() / "02_抖音视频转录")
+    parser.add_argument("--image-output", type=Path, default=raw_dir() / "05_抖音笔记图片")
     parser.add_argument("--model", default="small")
     parser.add_argument("--keep-video", action="store_true")
     args = parser.parse_args(argv)

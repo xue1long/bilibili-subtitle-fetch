@@ -8,7 +8,7 @@ import tempfile
 from pathlib import Path
 
 from prepend_meta import prepend_meta
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 from xiaohongshu_media import XiaohongshuError, discover_note, download_assets, parse_note_id
 
 
@@ -71,7 +71,7 @@ def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description="下载一个小红书视频或图文笔记")
     parser.add_argument("--url", required=True)
-    parser.add_argument("--output", "-o", type=Path, default=project_root() / "10_raw" / "03_小红书")
+    parser.add_argument("--output", "-o", type=Path, default=raw_dir() / "03_小红书")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args(argv)
     try:

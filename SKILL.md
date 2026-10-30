@@ -24,7 +24,7 @@ agent: general-purpose
 | 抖音图文帖 | 同上命令，自动识别为图文并下载图片（`--image-output` 指定目录） |
 | 小红书视频/图文 | `python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"` |
 
-推荐使用 `cli.py`：它发现来源、写入 manifest，并用 SQLite 规划可恢复任务。旧入口仍保留 `--space`、`--favorites`、`--output`、`--no-meta`、`--backend` 等选项；`--favorites` 读取项目根目录的 `videos_fav.json`。
+推荐使用 `cli.py`：它发现来源、写入 manifest，并用 SQLite 规划可恢复任务。任务是否"已产出"同时看**产物文件是否存在**——多台电脑共用同一份产物根时，靠它天然跨机去重，不必共享任务库。旧入口仍保留 `--space`、`--favorites`、`--output`、`--no-meta`、`--backend` 等选项；`--favorites` 读取项目根目录的 `videos_fav.json`。
 
 ## 搜索批量
 
@@ -47,6 +47,7 @@ python scripts/run_subtitle_batch.py
 ## 状态与输出
 
 - 字幕：`10_raw/01_B站视频转录/{BV}.md`，内容是 SRT；`--output` 可覆盖目录。
+- **产物根**默认是仓库内的 `10_raw/`；设 `BILIBILI_SFETCH_RAW_DIR` 可改指向别处，跨机共享时指向同步盘。值可以写**未展开**的 `%OneDriveConsumer%\...`，由每台机器展开成自己的盘符，同一份配置在所有机器上都成立。详见 `docs/cross-machine-sharing.md`。
 - 来源：`data/videos_manifest.json`。
 - 统一任务状态主库：`data/subtitle_tasks.db`。
 - 旧入口、批处理和救援共用：`{output_dir}/download_list.json`；CLI 会从 `data/subtitle_jobs.json` 和该文件迁移旧记录。

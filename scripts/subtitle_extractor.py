@@ -31,7 +31,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     sys.stderr.reconfigure(encoding="utf-8", errors="replace")
 
-# 字幕输出目录（默认存到项目根目录下的 10_raw/01_B站视频转录/）
+# 字幕输出目录（默认在产物根下的 01_B站视频转录/；产物根可用 BILIBILI_SFETCH_RAW_DIR 改指向）
 SUBTITLE_DIR = default_output_dir()
 
 # 本项目 wiki DB 路径（compile_db.json，video-wiki-compile 维护）

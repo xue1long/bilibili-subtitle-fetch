@@ -8,11 +8,20 @@ from sources.single_video import discover as discover_single
 from sources.space import discover as discover_space
 from pipeline.planner import plan
 from pipeline.models import TaskStatus
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 from storage.manifest import manifest_path, upsert
 from storage.state_store import load as load_state, state_path, update as update_state
 from storage.sqlite_store import SQLiteStore
 from subtitle_extractor import SubtitleExtractor
+
+
+def _artifact_exists(bvid: str) -> bool:
+    """产物文件是否已经存在。
+
+    产物文件是"已产出"的事实依据，优先于各机私有的任务库 —— 跨机共享产物根时，
+    靠它天然去重（见 docs/adr/0002）。
+    """
+    return (raw_dir() / "01_B站视频转录" / f"{bvid}.md").exists()
 
 
 def main(argv=None):
@@ -60,7 +69,7 @@ def main(argv=None):
         store = SQLiteStore(project_root() / "data" / "subtitle_tasks.db")
         store.migrate_json(jobs_path, legacy_path)
         store.upsert_videos(videos)
-        tasks = plan(videos, store.jobs())
+        tasks = plan(videos, store.jobs(), is_done=_artifact_exists)
         if args.only_status:
             tasks = [task for task in tasks if task.status.value == args.only_status]
         elif args.retry_failed:

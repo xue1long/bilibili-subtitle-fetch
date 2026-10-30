@@ -63,6 +63,8 @@ python scripts\cli.py --favorite-url "..." --retry-failed
 ## 运行约定
 
 - 默认后端是 Playwright；Selenium 仅作为显式兼容回退。
+- 产物根默认是仓库内的 `10_raw/`；设 `BILIBILI_SFETCH_RAW_DIR` 可把它指到别处（跨机共享时指向同步盘，值可写未展开的 `%OneDriveConsumer%\...`，各机展开成自己的盘符）。产物根与代码仓库是两个独立的根，详见 `docs/cross-machine-sharing.md` 与 `docs/adr/0001`。
+- 跨机共用同一份产物根时，**产物文件是否存在**是"已产出"的事实依据，优先于各机私有的任务库；规划器用 `is_done` 回调判定，详见 `docs/adr/0002`。
 - 默认 Chrome profile 是项目根目录的 `.chrome-bilibili`；设置 `BILIBILI_SFETCH_CHROME_PROFILE` 可覆盖。
 - 字幕输出为 SRT 内容，文件扩展名为 `.md`；默认路径可用 `--output` 覆盖。
 - `data/videos_manifest.json` 保存来源；`data/subtitle_tasks.db` 是统一入口的任务状态主库。
