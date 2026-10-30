@@ -1,7 +1,7 @@
 """Backfill existing Douyin/Xiaohongshu outputs into the multi-platform state.
 
-The pre-existing folders under ``10_raw/02_抖音视频笔记`` and
-``10_raw/03_小红书收藏夹`` already contain downloaded media and notes that were
+The pre-existing folders under ``<产物根>/02_抖音视频转录`` and
+``<产物根>/03_小红书`` already contain downloaded media and notes that were
 written without registering them in ``data/videos_manifest.json`` /
 ``data/subtitle_tasks.db``. This script scans those folders, parses the note ids
 from file names, and writes one record per file to:
@@ -23,7 +23,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 from storage.platform_manifest import (
     SUPPORTED_PLATFORMS,
     manifest_path,
@@ -33,8 +33,9 @@ from storage.platform_manifest import (
 from storage.sqlite_store import SQLiteStore
 
 
-DOuyin_DIR = "02_抖音视频笔记"
-XHS_DIRS = ("03_小红书收藏夹", "03_小红书")
+# Both the current upstream names and the older ones this machine produced.
+DOUYIN_DIRS = ("02_抖音视频转录", "02_抖音视频笔记")
+XHS_DIRS = ("03_小红书", "03_小红书收藏夹")
 
 # Notes named like ``6a322d530000000016026183.md`` (24 hex). Match the longest
 # common id format; fall back to the bare filename if it cannot be extracted.
@@ -135,9 +136,17 @@ def _parse_xiaohongshu_entries(raw_dir: Path):
     return entries
 
 
-def backfill(root: Path, *, write: bool = True) -> dict:
-    raw_root = root / "10_raw"
-    douyin_entries = _parse_douyin_entries(raw_root / DOuyin_DIR)
+def backfill(root: Path, *, write: bool = True, raw: Path | None = None) -> dict:
+    """``root`` is the project root; ``raw`` the artefact root.
+
+    ``raw`` defaults to ``root/10_raw`` so tests stay inside a temporary
+    directory; the CLI passes ``runtime_paths.raw_dir()`` because the artefact
+    root may live outside the repository.
+    """
+    raw_root = raw if raw is not None else root / "10_raw"
+    douyin_entries = []
+    for douyin_dir in DOUYIN_DIRS:
+        douyin_entries.extend(_parse_douyin_entries(raw_root / douyin_dir))
     xiaohongshu_entries = []
     for xhs_dir in XHS_DIRS:
         xiaohongshu_entries.extend(_parse_xiaohongshu_entries(raw_root / xhs_dir))
@@ -217,7 +226,7 @@ def main(argv=None) -> int:
                         help="只扫描，不写库")
     args = parser.parse_args(argv)
 
-    summary = backfill(args.root, write=not args.dry_run)
+    summary = backfill(args.root, write=not args.dry_run, raw=raw_dir())
     print(json.dumps(summary, ensure_ascii=False, indent=2))
     return 0
 

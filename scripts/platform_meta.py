@@ -9,7 +9,7 @@ reader per platform and normalises everything into::
 Sources
 -------
 bilibili
-    ``10_raw/01_B站视频转录/*.md`` frontmatter (``video_published_at``,
+    ``<产物根>/01_B站视频转录/*.md`` frontmatter (``video_published_at``,
     ``uploader``, ``title``) plus ``download_list.json`` (``downloaded_at``).
     The raw folder is named in Chinese, so ``os.listdir`` is used instead of
     ``glob`` (glob mis-handles the path on this machine).
@@ -18,7 +18,7 @@ douyin
     ``D:/admin/下载/Bili/抖音视频/data/.appdata/``. Each ``db_*.js`` file holds
     ``window.<name>_base64="<gzip+base64 JSON>"``.
 xiaohongshu
-    ``10_raw/03_小红书收藏夹/*.json`` — a mix of plain note arrays and
+    ``<产物根>/03_小红书/*.json`` — a mix of plain note arrays and
     ``*.state.json`` wrappers holding the notes under a ``notes`` key. They
     carry title, author, the original share URL and engagement counts, but
     **no publish date**.
@@ -35,9 +35,10 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 
 BILIBILI_DIR = "01_B站视频转录"
+XHS_DIRS = ("03_小红书", "03_小红书收藏夹")
 DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})")
 FRONTMATTER_FIELDS = ("title", "uploader", "bvid", "url", "view_count",
                       "like_count", "video_published_at")
@@ -249,10 +250,20 @@ def read_videos_manifest(path: Path) -> dict[str, dict]:
     return out
 
 
-def collect(root: Path | None = None) -> dict[str, dict[str, dict]]:
-    """Gather every local source, keyed by platform then video id."""
+def collect(root: Path | None = None, raw: Path | None = None) -> dict[str, dict[str, dict]]:
+    """Gather every local source, keyed by platform then video id.
+
+    ``root`` is the project root, ``raw`` the artefact root. When ``root`` is
+    given explicitly the artefact root follows it (``root/10_raw``) so tests
+    can work inside a temporary directory; otherwise the artefact root comes
+    from ``runtime_paths.raw_dir()`` — it may live outside the repository
+    (``BILIBILI_SFETCH_RAW_DIR``).
+    """
+    explicit_root = root is not None
     root = root or project_root()
-    bilibili_dir = root / "10_raw" / BILIBILI_DIR
+    if raw is None:
+        raw = root / "10_raw" if explicit_root else raw_dir()
+    bilibili_dir = raw / BILIBILI_DIR
     bili = merge(
         read_bilibili_frontmatter(bilibili_dir),
         read_videos_manifest(root / "data" / "videos_manifest.json"),
@@ -260,11 +271,13 @@ def collect(root: Path | None = None) -> dict[str, dict[str, dict]]:
     for bvid, record in read_download_list(
             bilibili_dir / "download_list.json").items():
         bili.setdefault(bvid, {}).update(record)
+    xiaohongshu: dict[str, dict] = {}
+    for directory in XHS_DIRS:
+        xiaohongshu.update(read_xiaohongshu_json(raw / directory))
     return {
         "bilibili": bili,
         "douyin": read_douyin(default_appdata()),
-        "xiaohongshu": read_xiaohongshu_json(
-            root / "10_raw" / "03_小红书收藏夹"),
+        "xiaohongshu": xiaohongshu,
     }
 
 

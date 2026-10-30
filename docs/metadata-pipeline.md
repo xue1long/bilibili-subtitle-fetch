@@ -47,7 +47,7 @@ python scripts\platform_meta_browser.py --platform bilibili --ids tmp\gap.txt --
 
 | 来源 | 提供 | 说明 |
 |---|---|---|
-| `10_raw/01_B站视频转录/*.md` frontmatter | title / uploader / published_at | **两种格式**：一套用 `bvid:`，另一套用 `bv:` 且带 `uid:`/`tags:` 等字段 |
+| `<产物根>/01_B站视频转录/*.md` frontmatter | title / uploader / published_at | **两种格式**：一套用 `bvid:`，另一套用 `bv:` 且带 `uid:`/`tags:` 等字段 |
 | `data/videos_manifest.json` | title | 660 条，部分视频只有 manifest 有标题 |
 | `download_list.json` | downloaded_at | 1045 条全有，是唯一 100% 覆盖的字段 |
 
@@ -73,8 +73,8 @@ window.dbv_base64="<gzip + base64 的 JSON>"
 
 | 来源 | 提供 | 说明 |
 |---|---|---|
-| `10_raw/03_小红书收藏夹/*.json` | title / author / url / 点赞收藏数 | 纯数组格式 |
-| `10_raw/03_小红书收藏夹/*.state.json` | 同上 | `{board_id, notes: [...]}` 包装格式 |
+| `<产物根>/03_小红书/*.json` | title / author / url / 点赞收藏数 | 纯数组格式 |
+| `<产物根>/03_小红书/*.state.json` | 同上 | `{board_id, notes: [...]}` 包装格式 |
 | `scripts/collect_xhs_dates.py` | published_at | 需登录，浏览器采集 |
 
 本地两份文件合并去重后有 **838 条笔记**，标题和作者 100% 覆盖，但**所有字段里都没有发布时间**。

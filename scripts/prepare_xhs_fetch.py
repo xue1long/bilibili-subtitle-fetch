@@ -15,10 +15,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from platform_meta import read_xiaohongshu_json
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 
 root = project_root()
-notes = read_xiaohongshu_json(root / "10_raw" / "03_小红书收藏夹")
+notes = read_xiaohongshu_json(raw_dir() / "03_小红书")
 
 ids = sorted(notes)
 urls = {vid: notes[vid]["source_url"] for vid in ids

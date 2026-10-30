@@ -163,7 +163,7 @@ python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<�
 
 请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）。默认输出到 `10_raw/03_小红书/<笔记ID>/`：视频笔记包含 `video.mp4`，图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片；同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令先使用无 Cookie 页面，页面无法发现资源时才尝试 `.chrome-xiaohongshu`；需要登录时先运行 `python scripts\open_xiaohongshu_login.py`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。成功后会把 `(platform="xiaohongshu", video_id=note_id)` 写进 `data/subtitle_tasks.db` 与 `data/platform_videos_manifest.json`，默认已存在 .md 时跳过；已有目录需要重新下载请追加 `--overwrite`。
 
-把旧的 `10_raw/02_抖音视频笔记` 或 `10_raw/03_小红书收藏夹` 中已存在、但未登记到状态库的文件批量补登：
+把旧的 `<产物根>/02_抖音视频转录`（旧名 `02_抖音视频笔记`）或 `<产物根>/03_小红书`（旧名 `03_小红书收藏夹`）中已存在、但未登记到状态库的文件批量补登：
 
 ```powershell
 python scripts\backfill_platform_records.py            # 写入 SQLite + platform manifest

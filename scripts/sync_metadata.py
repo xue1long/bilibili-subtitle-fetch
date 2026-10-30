@@ -26,7 +26,7 @@ from contextlib import closing
 from pathlib import Path
 
 from platform_meta import collect, default_appdata, merge, write_json
-from runtime_paths import project_root
+from runtime_paths import project_root, raw_dir
 from storage.platform_manifest import manifest_path
 from storage.sqlite_store import SQLiteStore
 
@@ -163,7 +163,7 @@ def main(argv=None) -> int:
                         default="user")
     args = parser.parse_args(argv)
 
-    sources = collect(args.root)
+    sources = collect(args.root, raw=raw_dir())
     print(f"抖珍藏本地库: {default_appdata()}")
     for platform in PLATFORMS:
         print(f"  {platform:14} {len(sources.get(platform, {})):5} 条")

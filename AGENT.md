@@ -22,7 +22,7 @@
 - `10_raw/03_小红书/<笔记ID>/`：小红书媒体和 `<笔记ID>.md` 输出目录；`.md` 正文写 markdown 资源引用。
 - `data/platform_videos_manifest.json`：抖音/小红书的来源清单（B 站仍在 `data/videos_manifest.json`）。
 - `data/subtitle_tasks.db`：所有平台的任务状态主库，主键为 `(platform, video_id)`；`SQLiteStore` 在加载时自动把老的 `videos.bvid` 单列主键升级到合成主键，旧 B 站记录以 `platform="bilibili"` 保留。
-- `scripts/backfill_platform_records.py`：扫描 `10_raw/02_抖音视频笔记` 与 `10_raw/03_小红书收藏夹`，把已存在的 `.md`/`.mp4` 回填到 `data/platform_videos_manifest.json` 与 `data/subtitle_tasks.db`。
+- `scripts/backfill_platform_records.py`：扫描产物根下的 `02_抖音视频转录`（旧名 `02_抖音视频笔记`）与 `03_小红书`（旧名 `03_小红书收藏夹`），把已存在的 `.md`/`.mp4` 回填到 `data/platform_videos_manifest.json` 与 `data/subtitle_tasks.db`。
 - `scripts/platform_meta.py`：读取各平台本地元数据源（B站 frontmatter/manifest/download_list、抖珍藏本地库），归一化成统一的 `{video_id: {...}}` 结构。
 - `scripts/platform_meta_browser.py`：抖音/B站元数据的浏览器兜底抓取，结果落 JSONL 缓存，失败项可重跑。
 - `scripts/feishu_base.py`：`lark-cli` 封装——建表、建字段、分页读记录、批量增改记录、协作者授权。
