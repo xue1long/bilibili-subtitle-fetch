@@ -11,10 +11,38 @@ import douyin_cli
 
 URL = "https://www.douyin.com/user/self?modal_id=123456&showTab=favorite_collection"
 
+VIDEO_POST = {
+    "video_id": "123456",
+    "media_kind": "video",
+    "image_urls": [],
+    "video_urls": ["https://cdn.invalid/target.mp4"],
+    "payload": {
+        "aweme_detail": {
+            "aweme_id": "123456",
+            "desc": "标题",
+            "author": {"nickname": "作者"},
+        }
+    },
+}
+
+IMAGE_POST = {
+    "video_id": "123456",
+    "media_kind": "image",
+    "image_urls": ["https://cdn.invalid/1.webp"],
+    "video_urls": [],
+    "payload": {
+        "aweme_detail": {
+            "aweme_id": "123456",
+            "desc": "图文简介",
+            "author": {"nickname": "作者"},
+        }
+    },
+}
+
 
 class DouyinCliTest(unittest.TestCase):
     def test_run_writes_metadata_before_srt(self):
-        def fake_download(url, video_path, profile_dir):
+        def fake_download(url, video_path, profile_dir, post=None):
             video_path.write_bytes(b"video")
             return {
                 "platform": "douyin",
@@ -26,9 +54,10 @@ class DouyinCliTest(unittest.TestCase):
             }
 
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
-                    output = douyin_cli.run(URL, Path(directory), model_size="small")
+            with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
+                with patch.object(douyin_cli, "download_video", side_effect=fake_download):
+                    with patch.object(douyin_cli, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
+                        output = douyin_cli.run(URL, Path(directory), model_size="small")
 
             content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "DY123456.md")
@@ -37,16 +66,56 @@ class DouyinCliTest(unittest.TestCase):
             self.assertIn("transcript_model: small", content)
 
     def test_failed_asr_does_not_leave_markdown(self):
-        def fake_download(url, video_path, profile_dir):
+        def fake_download(url, video_path, profile_dir, post=None):
             video_path.write_bytes(b"video")
             return {"video_id": "123456", "platform": "douyin"}
 
         with tempfile.TemporaryDirectory() as directory:
-            with patch.object(douyin_cli, "download_video", side_effect=fake_download):
-                with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
-                    with self.assertRaises(douyin_cli.DouyinCliError):
-                        douyin_cli.run(URL, Path(directory))
+            with patch.object(douyin_cli, "resolve_post", return_value=VIDEO_POST):
+                with patch.object(douyin_cli, "download_video", side_effect=fake_download):
+                    with patch.object(douyin_cli, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
+                        with self.assertRaises(douyin_cli.DouyinCliError):
+                            douyin_cli.run(URL, Path(directory))
             self.assertFalse((Path(directory) / "DY123456.md").exists())
+
+    def test_image_post_writes_manifest_and_skips_transcription(self):
+        def fake_download_images(urls, output_dir, referer=None):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "01.webp").write_bytes(b"image")
+            return ["01.webp"]
+
+        with tempfile.TemporaryDirectory() as directory:
+            images_dir = Path(directory) / "05_抖音笔记图片"
+            with patch.object(douyin_cli, "resolve_post", return_value=IMAGE_POST):
+                with patch.object(douyin_cli, "download_images", side_effect=fake_download_images):
+                    with patch.object(douyin_cli, "transcribe_video") as transcribe:
+                        output = douyin_cli.run(URL, Path(directory), image_output_dir=images_dir)
+
+            transcribe.assert_not_called()
+            self.assertEqual(output.name, "DY123456.md")
+            self.assertEqual(output.parent, images_dir / "DY123456")
+            self.assertTrue((output.parent / "01.webp").exists())
+            content = output.read_text(encoding="utf-8")
+            self.assertIn("note_type: image", content)
+            self.assertIn("asset_count: 1", content)
+            self.assertIn("- 01.webp", content)
+            # 正文要有 markdown 图片引用，Obsidian 才能直接显示图
+            body = content.split("---\n", 2)[-1]
+            self.assertIn("![图 1](01.webp)", body)
+
+    def test_image_post_failure_removes_partial_directory(self):
+        def fake_download_images(urls, output_dir, referer=None):
+            output_dir.mkdir(parents=True, exist_ok=True)
+            (output_dir / "01.webp").write_bytes(b"image")
+            raise douyin_cli.DouyinMediaError("ASSET_DOWNLOAD_FAILED", "boom")
+
+        with tempfile.TemporaryDirectory() as directory:
+            images_dir = Path(directory) / "05_抖音笔记图片"
+            with patch.object(douyin_cli, "resolve_post", return_value=IMAGE_POST):
+                with patch.object(douyin_cli, "download_images", side_effect=fake_download_images):
+                    with self.assertRaises(douyin_cli.DouyinCliError):
+                        douyin_cli.run(URL, Path(directory), image_output_dir=images_dir)
+            self.assertFalse((images_dir / "DY123456").exists())
 
 
 if __name__ == "__main__":

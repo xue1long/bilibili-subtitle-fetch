@@ -10,6 +10,15 @@ import urllib.request
 from pathlib import Path
 from urllib.parse import urlparse
 
+from xiaohongshu_cdp import (
+    cdp_endpoint,
+    chrome_executable,
+    free_port,
+    launch_chrome,
+    stop_chrome,
+    wait_for_cdp,
+)
+
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36"
 
@@ -50,7 +59,7 @@ def normalize_metadata(state: dict, source_url: str) -> dict:
         "title": ("title",),
         "uploader": ("uploader", "author", "nickname"),
         "description": ("description", "desc"),
-        "published_label": ("published_label", "published_at", "time"),
+        "published_label": ("published_label", "published_at", "published", "time"),
         "note_type": ("note_type",),
         "asset_count": ("asset_count",),
     }
@@ -147,16 +156,153 @@ async def _discover_page(source_url: str, profile_dir: Path | None = None):
             await context.close()
 
 
+def _note_state_script():
+    """优先读页面状态里的权威笔记数据，读不到再退回 DOM 扫描。"""
+    return """() => {
+        const result = {authoritative: false, title: '', description: '', author: '', published: '', videos: [], images: []};
+        let note = null;
+        const state = window.__INITIAL_STATE__;
+        if (state && state.note && state.note.noteDetailMap) {
+            const map = state.note.noteDetailMap;
+            const key = Object.keys(map)[0];
+            note = (map[key] && map[key].note) || null;
+        }
+        if (note) {
+            result.authoritative = true;
+            result.title = note.title || '';
+            result.description = note.desc || '';
+            result.author = (note.user && note.user.nickname) || '';
+            result.images = (note.imageList || []).map(image => ({
+                url: image.urlDefault || image.urlPre || '',
+                width: image.width || 0,
+                height: image.height || 0,
+            }));
+            const streams = (note.video && note.video.media && note.video.media.stream) || {};
+            const quality = (streams.h264 || [])[0];
+            if (quality && quality.masterUrl) result.videos.push(quality.masterUrl);
+            if (note.time) {
+                const d = new Date(note.time);
+                const pad = (n) => String(n).padStart(2, '0');
+                result.published = pad(d.getMonth() + 1) + '-' + pad(d.getDate())
+                    + (note.ipLocation ? ' ' + note.ipLocation : '');
+            }
+        }
+        if (!result.title) {
+            const title = document.querySelector('#detail-title')?.innerText?.trim() || '';
+            const content = document.querySelector('.detail-desc, .note-content')?.innerText?.trim() || '';
+            const description = content.startsWith(title) ? content.slice(title.length).trim() : content;
+            const container = document.querySelector('#noteContainer, .note-container') || document;
+            const author = Array.from(container.querySelectorAll('a[href*="/user/profile/"]'))
+                .map(a => (a.innerText || '').trim())
+                .find(text => text && text !== '我' && text.length < 80) || '';
+            const published = (content.match(/(?:编辑于|发布于)?\\d{1,2}-\\d{1,2}[^\\n]*/) || [''])[0].trim();
+            result.title = title;
+            result.description = description;
+            result.author = author;
+            result.published = published;
+            result.images = Array.from(container.querySelectorAll('.swiper img, img'))
+                .map(image => ({
+                    url: image.currentSrc || image.src || '',
+                    width: image.naturalWidth || image.width || 0,
+                    height: image.naturalHeight || image.height || 0,
+                }));
+            result.videos = Array.from(container.querySelectorAll('video'))
+                .map(video => video.currentSrc || video.src || '')
+                .filter(Boolean);
+        }
+        return result;
+    }"""
+
+
+def _normalize_media_url(url: str) -> str:
+    """状态里的图片地址是 http 或协议相对形式，统一升级到 https。"""
+    if url.startswith("//"):
+        return f"https:{url}"
+    if url.startswith("http://"):
+        return f"https://{url[len('http://'):]}"
+    return url
+
+
+async def _discover_page_cdp(source_url: str, endpoint: str) -> dict:
+    """附着到普通方式启动的 Chrome，复用它的登录态。"""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        browser = await playwright.chromium.connect_over_cdp(endpoint)
+        try:
+            context = browser.contexts[0] if browser.contexts else await browser.new_context()
+            page = context.pages[0] if context.pages else await context.new_page()
+            await page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+            await page.wait_for_timeout(1200)
+            # 小红书可能先弹登录窗口，但后台仍在加载笔记；等权威数据出现再判定。
+            # 页面状态里的 imageList 才是完整图集，DOM 兜底会漏掉懒加载的轮播图。
+            state = {}
+            for _ in range(15):
+                state = await page.evaluate(_note_state_script())
+                if state.get("authoritative"):
+                    break
+                if state.get("title") and urlparse(page.url).path.rstrip("/") != "/login":
+                    break
+                await page.wait_for_timeout(1000)
+            if not state.get("title") and urlparse(page.url).path.rstrip("/") == "/login":
+                return {"login_required": True}
+        finally:
+            await browser.close()
+    state["videos"] = [_normalize_media_url(url) for url in state.get("videos") or [] if url]
+    state["images"] = [
+        {**image, "url": _normalize_media_url(image.get("url") or "")}
+        for image in state.get("images") or []
+        if image.get("url")
+    ]
+    # 页面状态里的简介带平台内部话题标记（#AI[话题]#），渲染出来就是 #AI
+    if state.get("description"):
+        state["description"] = re.sub(r"\[话题\]#", "", state["description"])
+    return state
+
+
+def _discover_via_cdp(source_url: str, profile_dir: Path) -> dict:
+    """用普通 Chrome 承载 profile，再通过 CDP 发现资源。
+
+    先无头跑，不弹窗口；拿不到再退回有头模式。
+    """
+    if not chrome_executable():
+        return {}
+    for headless in (True, False):
+        port = free_port()
+        process = launch_chrome(profile_dir, port, headless=headless)
+        if not process:
+            return {}
+        try:
+            if not wait_for_cdp(port):
+                continue
+            state = asyncio.run(_discover_page_cdp(source_url, cdp_endpoint(port)))
+        except Exception:
+            state = {}
+        finally:
+            stop_chrome(process)
+        if state.get("title"):
+            return state
+    return {}
+
+
 def discover_note(url: str, profile_dir: Path | None = None) -> tuple[dict, str | None, list[str]]:
     parse_note_id(url)
     env_profile = os.environ.get("XHS_SFETCH_CHROME_PROFILE")
     profile = profile_dir or (Path(env_profile).expanduser() if env_profile else None)
+    cdp_profile_env = os.environ.get("XHS_SFETCH_CDP_PROFILE")
+    cdp_profile = Path(cdp_profile_env).expanduser() if cdp_profile_env else profile
     login_required = False
-    try:
-        state = asyncio.run(_discover_page(url))
+    state: dict = {}
+    # 普通 Chrome 承载的 CDP 通道最可靠，优先走它
+    if cdp_profile:
+        state = _discover_via_cdp(url, cdp_profile)
         login_required = bool(state.get("login_required"))
-    except Exception:
-        state = {}
+    if not state.get("title"):
+        try:
+            state = asyncio.run(_discover_page(url))
+            login_required = login_required or bool(state.get("login_required"))
+        except Exception:
+            state = {}
     if not state.get("title") and profile:
         try:
             state = asyncio.run(_discover_page(url, profile))

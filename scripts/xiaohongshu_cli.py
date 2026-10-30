@@ -22,6 +22,15 @@ def _profile_dir() -> Path:
     return Path(os.environ.get("XHS_SFETCH_CHROME_PROFILE", project_root() / ".chrome-xiaohongshu"))
 
 
+def _note_body(note_type: str | None, asset_files: list[str]) -> str:
+    """正文写资源引用，让 Obsidian 等阅读器能直接看到图、播视频。"""
+    if not asset_files:
+        return ""
+    if note_type == "video":
+        return f"[视频]({asset_files[0]})\n"
+    return "\n\n".join(f"![图 {index}]({name})" for index, name in enumerate(asset_files, 1)) + "\n"
+
+
 def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
     parse_note_id(url)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -46,7 +55,7 @@ def run(url: str, output_dir: Path, overwrite: bool = False) -> Path:
 
             metadata = {**metadata, **downloaded, "assets": downloaded["asset_files"]}
             body_path = work_dir / f"{note_id}.md"
-            body_path.write_text("", encoding="utf-8")
+            body_path.write_text(_note_body(metadata.get("note_type"), downloaded["asset_files"]), encoding="utf-8")
             if not prepend_meta(metadata, body_path):
                 raise XiaohongshuCliError("METADATA_PARTIAL", "写入 frontmatter 失败")
             if final_dir and final_dir.exists():

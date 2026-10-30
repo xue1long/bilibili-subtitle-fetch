@@ -14,8 +14,11 @@ from urllib.parse import parse_qs, urlparse
 
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/138.0.0.0 Safari/537.36"
 HEADERS = {"User-Agent": USER_AGENT, "Referer": "https://www.douyin.com/"}
+# 抖音是客户端渲染，初始 HTML 里没有 playAddr（正则命中 0 次），媒体只能从
+# aweme/detail 接口拿；下面的正则只用于旧页面扫描的兜底路径。
 MEDIA_RE = re.compile(r'"playAddr"\s*:\s*"([^"\\]*(?:\\.[^"\\]*)*)"')
 ID_RE = re.compile(r'"(?:aweme_id|awemeId|video_id)"\s*:\s*"?([0-9]+)')
+AWEME_DETAIL_PATH = "/aweme/v1/web/aweme/detail"
 
 
 class DouyinMediaError(RuntimeError):
@@ -35,6 +38,11 @@ def parse_video_id(value: str) -> str:
     if value.isdigit():
         return value
     raise DouyinMediaError("VIDEO_NOT_FOUND", "无法从 URL 解析抖音视频 ID")
+
+
+def canonical_video_url(video_id: str) -> str:
+    """详情页地址：/video/<id> 才会触发 aweme/detail 接口。"""
+    return f"https://www.douyin.com/video/{video_id}"
 
 
 def _first(data, *keys):
@@ -114,6 +122,76 @@ def _metadata_from_html(html: str, source_url: str, video_id: str) -> dict:
     return result
 
 
+def _aweme_media_kind(detail: dict) -> str:
+    """图文帖返回 image，视频帖返回 video。"""
+    if detail.get("images"):
+        return "image"
+    if detail.get("media_type") == 2 or detail.get("aweme_type") in (2, 68):
+        return "image"
+    return "video"
+
+
+def _collect_image_urls(detail: dict) -> list[str]:
+    """每张图取一个地址：优先 download_url_list（原图），回退 url_list。"""
+    urls: list[str] = []
+    seen: set[str] = set()
+    for image in detail.get("images") or []:
+        if not isinstance(image, dict):
+            continue
+        for url in list(image.get("download_url_list") or []) + list(image.get("url_list") or []):
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+                break
+    return urls
+
+
+def _collect_video_urls(detail: dict) -> list[str]:
+    """视频帖取码率列表里的播放地址，再回退 play_addr。"""
+    video = detail.get("video") or {}
+    urls: list[str] = []
+    seen: set[str] = set()
+    for entry in video.get("bit_rate") or []:
+        play = entry.get("play_addr") or {}
+        for url in play.get("url_list") or []:
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
+    for url in (video.get("play_addr") or {}).get("url_list") or []:
+        if url and url not in seen:
+            seen.add(url)
+            urls.append(url)
+    return urls
+
+
+def parse_aweme_detail(payload: dict, video_id: str) -> dict | None:
+    """把 aweme/detail 响应归一化成目标帖记录；aweme_id 不匹配时返回 None。"""
+    if not isinstance(payload, dict):
+        return None
+    detail = payload.get("aweme_detail")
+    if not isinstance(detail, dict):
+        return None
+    if str(detail.get("aweme_id") or "") != str(video_id):
+        return None
+    kind = _aweme_media_kind(detail)
+    author = detail.get("author") or {}
+    video = detail.get("video") or {}
+    desc = detail.get("desc") or ""
+    return {
+        "video_id": str(video_id),
+        "media_kind": kind,
+        "title": desc,
+        "description": desc,
+        "uploader": author.get("nickname") or author.get("unique_id") or "",
+        "create_time": detail.get("create_time"),
+        "duration": video.get("duration") or 0,
+        # 图文帖的 play_addr 指向背景音乐，不是内容本身，这里不取。
+        "image_urls": _collect_image_urls(detail) if kind == "image" else [],
+        "video_urls": _collect_video_urls(detail) if kind == "video" else [],
+        "payload": payload,
+    }
+
+
 def _download_url(url: str, output_path: Path) -> None:
     probe = urllib.request.Request(url, headers={**HEADERS, "Range": "bytes=0-1023"})
     try:
@@ -136,12 +214,129 @@ def _download_url(url: str, output_path: Path) -> None:
         raise DouyinMediaError("VIDEO_DOWNLOAD_FAILED", f"视频流下载失败: {exc}") from exc
 
 
-async def _anonymous_page(source_url: str, video_id: str):
+def _download_image(url: str, path: Path, referer: str) -> str:
+    """下载一张图，返回与响应类型匹配的扩展名。"""
+    headers = {"User-Agent": USER_AGENT, "Referer": referer}
+    try:
+        request = urllib.request.Request(url, headers=headers)
+        with urllib.request.urlopen(request, timeout=120) as response:
+            content_type = response.headers.get("Content-Type", "")
+            with path.open("wb") as target:
+                shutil.copyfileobj(response, target, length=1024 * 1024)
+    except Exception as exc:
+        path.unlink(missing_ok=True)
+        raise DouyinMediaError("ASSET_DOWNLOAD_FAILED", f"图片下载失败: {exc}") from exc
+    if "webp" in content_type:
+        return "webp"
+    if "png" in content_type:
+        return "png"
+    if "jpeg" in content_type or "jpg" in content_type:
+        return "jpg"
+    return "webp"
+
+
+def download_images(urls: list[str], output_dir: Path, referer: str = "https://www.douyin.com/") -> list[str]:
+    """下载图文帖的全部图片，返回相对文件名列表。"""
+    if not urls:
+        raise DouyinMediaError("ASSET_NOT_FOUND", "抖音图文没有可下载的图片")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    files: list[str] = []
+    try:
+        for index, url in enumerate(urls, 1):
+            temp_path = output_dir / f"{index:02d}.tmp"
+            extension = _download_image(url, temp_path, referer)
+            final_path = output_dir / f"{index:02d}.{extension}"
+            temp_path.replace(final_path)
+            files.append(final_path.name)
+    except Exception:
+        shutil.rmtree(output_dir, ignore_errors=True)
+        raise
+    return files
+
+
+_PAGE_STATE_SCRIPT = """() => {
+    for (const key of ['__INITIAL_STATE__', '__NEXT_DATA__', '_ROUTER_DATA__']) {
+        const value = window[key];
+        if (value && typeof value === 'object') return value;
+    }
+    return {};
+}"""
+
+
+async def _open_page(playwright, profile_dir: Path | None):
+    if profile_dir:
+        context = await playwright.chromium.launch_persistent_context(
+            user_data_dir=str(profile_dir), headless=True, user_agent=USER_AGENT
+        )
+    else:
+        browser = await playwright.chromium.launch(headless=True)
+        context = await browser.new_context(user_agent=USER_AGENT)
+    page = context.pages[0] if context.pages else await context.new_page()
+    return context, page
+
+
+async def _capture_aweme_detail(video_id: str, profile_dir: Path | None = None, timeout_ms: int = 20000) -> dict | None:
+    """打开详情页，抓取 aweme/detail 接口的 JSON 响应。
+
+    接口在页面加载后数秒才返回，所以等事件而不是固定睡眠。
+    """
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:
-        browser = await playwright.chromium.launch(headless=True)
-        page = await browser.new_page(user_agent=USER_AGENT)
+        context, page = await _open_page(playwright, profile_dir)
+        payloads = []
+        captured = asyncio.Event()
+
+        async def on_response(response):
+            if AWEME_DETAIL_PATH not in response.url:
+                return
+            try:
+                payloads.append(await response.json())
+            except Exception:
+                pass
+            finally:
+                captured.set()
+
+        page.on("response", on_response)
+        try:
+            await page.goto(canonical_video_url(video_id), wait_until="domcontentloaded", timeout=60000)
+            # 该接口在页面加载后约 8 秒才返回，等事件而不是固定 sleep
+            try:
+                await asyncio.wait_for(captured.wait(), timeout=timeout_ms / 1000)
+            except asyncio.TimeoutError:
+                pass
+            await page.wait_for_timeout(500)
+        finally:
+            await context.close()
+    for payload in payloads:
+        if isinstance(payload, dict) and payload.get("aweme_detail"):
+            return payload
+    return None
+
+
+def resolve_post(url: str, profile_dir: Path | None = None) -> dict | None:
+    """解析目标抖音帖；匿名接口优先，其次已登录 profile。"""
+    video_id = parse_video_id(url)
+    for use_profile in (False, True):
+        profile = profile_dir if use_profile else None
+        try:
+            payload = asyncio.run(_capture_aweme_detail(video_id, profile))
+        except Exception:
+            payload = None
+        if not payload:
+            continue
+        record = parse_aweme_detail(payload, video_id)
+        if record:
+            return record
+    return None
+
+
+async def _legacy_page(source_url: str, video_id: str, profile_dir: Path | None = None):
+    """旧路径：扫描页面 HTML 与网络响应里的播放地址。"""
+    from playwright.async_api import async_playwright
+
+    async with async_playwright() as playwright:
+        context, page = await _open_page(playwright, profile_dir)
         media_responses = []
 
         async def on_response(response):
@@ -151,18 +346,10 @@ async def _anonymous_page(source_url: str, video_id: str):
 
         page.on("response", on_response)
         try:
-            await page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
+            await page.goto(canonical_video_url(video_id), wait_until="domcontentloaded", timeout=60000)
             await page.wait_for_timeout(3500)
             html = await page.content()
-            state = await page.evaluate(
-                """() => {
-                    for (const key of ['__INITIAL_STATE__', '__NEXT_DATA__', '_ROUTER_DATA__']) {
-                        const value = window[key];
-                        if (value && typeof value === 'object') return value;
-                    }
-                    return {};
-                }"""
-            )
+            state = await page.evaluate(_PAGE_STATE_SCRIPT)
             media_url = extract_media_url_from_html(html, video_id)
             if not media_url:
                 media_url = _select_network_media_url(media_responses, html, video_id)
@@ -170,7 +357,7 @@ async def _anonymous_page(source_url: str, video_id: str):
             metadata.update({k: v for k, v in _metadata_from_html(html, source_url, video_id).items() if k not in metadata})
             return media_url, metadata
         finally:
-            await browser.close()
+            await context.close()
 
 
 def _try_ytdlp(source_url: str, output_path: Path) -> bool:
@@ -182,38 +369,43 @@ def _try_ytdlp(source_url: str, output_path: Path) -> bool:
     return result.returncode == 0 and output_path.exists() and output_path.stat().st_size > 0
 
 
-def download_video(url: str, output_path: Path, profile_dir: Path) -> dict:
+def download_video(url: str, output_path: Path, profile_dir: Path, post: dict | None = None) -> dict:
     video_id = parse_video_id(url)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    if post is None:
+        post = resolve_post(url, profile_dir)
+    if post and post.get("media_kind") == "video":
+        metadata = extract_page_metadata(post.get("payload") or {}, url)
+        for media_url in post.get("video_urls") or []:
+            try:
+                _download_url(media_url, output_path)
+                return metadata
+            except DouyinMediaError:
+                continue
+
     try:
-        media_url, metadata = asyncio.run(_anonymous_page(url, video_id))
-        if media_url:
+        media_url, metadata = asyncio.run(_legacy_page(url, video_id))
+    except Exception:
+        media_url, metadata = None, {}
+    if media_url:
+        try:
             _download_url(media_url, output_path)
             return metadata
-    except Exception:
-        pass
+        except DouyinMediaError:
+            pass
 
     if _try_ytdlp(url, output_path):
         return extract_page_metadata({}, url)
 
     # ponytail: one authenticated fallback, no cookie persistence beyond the user-selected browser profile.
     try:
-        from playwright.sync_api import sync_playwright
-
-        with sync_playwright() as playwright:
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile_dir), headless=True, user_agent=USER_AGENT
-            )
-            page = context.pages[0] if context.pages else context.new_page()
-            page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            page.wait_for_timeout(3500)
-            html = page.content()
-            media_url = extract_media_url_from_html(html, video_id)
-            metadata = _metadata_from_html(html, url, video_id)
-            context.close()
-        if media_url:
+        media_url, metadata = asyncio.run(_legacy_page(url, video_id, profile_dir))
+    except Exception:
+        media_url, metadata = None, {}
+    if media_url:
+        try:
             _download_url(media_url, output_path)
             return metadata
-    except Exception:
-        pass
+        except DouyinMediaError:
+            pass
     raise DouyinMediaError("LOGIN_REQUIRED", "匿名解析和登录态 fallback 都未找到目标视频")

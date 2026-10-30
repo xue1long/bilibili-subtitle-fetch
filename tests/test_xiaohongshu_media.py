@@ -13,6 +13,8 @@ from xiaohongshu_media import (
     scaled_dimensions,
     discover_note,
     XiaohongshuError,
+    _normalize_media_url,
+    _note_state_script,
     _page_state_script,
 )
 
@@ -78,6 +80,47 @@ class XiaohongshuMediaTest(unittest.TestCase):
         script = _page_state_script()
         self.assertIn(".detail-desc, .note-content", script)
         self.assertIn("#noteContainer, .note-container", script)
+
+    def test_note_state_script_prefers_page_state_image_list(self):
+        script = _note_state_script()
+        self.assertIn("__INITIAL_STATE__", script)
+        self.assertIn("imageList", script)
+        self.assertIn("authoritative", script)
+
+    def test_media_url_is_upgraded_to_https(self):
+        self.assertEqual(
+            _normalize_media_url("//sns-webpic-qc.xhscdn.com/a.webp"),
+            "https://sns-webpic-qc.xhscdn.com/a.webp",
+        )
+        self.assertEqual(
+            _normalize_media_url("http://sns-webpic-qc.xhscdn.com/a.webp"),
+            "https://sns-webpic-qc.xhscdn.com/a.webp",
+        )
+        self.assertEqual(
+            _normalize_media_url("https://sns-webpic-qc.xhscdn.com/a.webp"),
+            "https://sns-webpic-qc.xhscdn.com/a.webp",
+        )
+
+    def test_discover_note_prefers_cdp_path(self):
+        state = {
+            "title": "标题",
+            "description": "简介",
+            "author": "作者",
+            "published": "09-12 福建",
+            "videos": [],
+            "images": [{"url": "https://sns-webpic-qc.xhscdn.com/01.webp", "width": 1080, "height": 1800}],
+        }
+        with patch("xiaohongshu_media._discover_via_cdp", return_value=state) as cdp:
+            with patch("xiaohongshu_media._discover_page", side_effect=AssertionError("不该走匿名路径")):
+                metadata, video_url, image_urls = discover_note(
+                    "https://www.xiaohongshu.com/explore/abc?xsec_token=secret",
+                    Path("/tmp/profile"),
+                )
+        cdp.assert_called_once()
+        self.assertIsNone(video_url)
+        self.assertEqual(image_urls, ["https://sns-webpic-qc.xhscdn.com/01.webp"])
+        self.assertEqual(metadata["note_type"], "image")
+        self.assertEqual(metadata["published_label"], "09-12 福建")
 
 
 if __name__ == "__main__":

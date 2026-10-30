@@ -30,6 +30,8 @@ class XiaohongshuCliTest(unittest.TestCase):
             self.assertEqual(output.name, "video1.md")
             self.assertIn("note_type: video", output.read_text(encoding="utf-8"))
             self.assertTrue((output.parent / "video.mp4").exists())
+            # 正文要有资源引用，Obsidian 才能直接看到图/播视频
+            self.assertIn("[视频](video.mp4)", output.read_text(encoding="utf-8"))
 
     def test_run_image_writes_all_image_paths(self):
         def fake_discover(url, profile_dir):
@@ -50,6 +52,10 @@ class XiaohongshuCliTest(unittest.TestCase):
             self.assertIn("note_type: image", content)
             self.assertIn("images/01.webp", content)
             self.assertTrue((output.parent / "images/02.webp").exists())
+            # 正文要有 markdown 图片引用
+            body = content.split("---\n", 2)[-1]
+            self.assertIn("![图 1](images/01.webp)", body)
+            self.assertIn("![图 2](images/02.webp)", body)
 
     def test_failed_asset_download_leaves_no_markdown(self):
         def fake_discover(url, profile_dir):
