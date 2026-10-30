@@ -45,7 +45,7 @@ class XiaohongshuCliTest(unittest.TestCase):
                 with patch.object(xiaohongshu_cli, "download_video_asset", side_effect=fake_download_video_asset):
                     with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
                         with patch.object(video_artifact, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
-                            output = xiaohongshu_cli.run(VIDEO_URL, Path(directory))
+                            output = xiaohongshu_cli.run(VIDEO_URL, Path(directory), state_root=Path(directory))
 
             content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "video1.md")
@@ -94,7 +94,7 @@ class XiaohongshuCliTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
                 with patch.object(xiaohongshu_cli, "download_assets", side_effect=fake_download):
-                    output = xiaohongshu_cli.run(IMAGE_URL, Path(directory))
+                    output = xiaohongshu_cli.run(IMAGE_URL, Path(directory), state_root=Path(directory))
             content = output.read_text(encoding="utf-8")
             self.assertIn("note_type: image", content)
             self.assertIn("images/01.webp", content)
@@ -112,7 +112,7 @@ class XiaohongshuCliTest(unittest.TestCase):
             with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
                 with patch.object(xiaohongshu_cli, "download_assets", side_effect=RuntimeError("download failed")):
                     with self.assertRaises(xiaohongshu_cli.XiaohongshuCliError):
-                        xiaohongshu_cli.run(IMAGE_URL, Path(directory))
+                        xiaohongshu_cli.run(IMAGE_URL, Path(directory), state_root=Path(directory))
             self.assertFalse((Path(directory) / "broken" / "broken.md").exists())
 
 

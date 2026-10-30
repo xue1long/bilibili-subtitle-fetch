@@ -23,6 +23,9 @@ agent: general-purpose
 | 抖音单视频 | `python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=...&showTab=favorite_collection"` |
 | 抖音图文帖 | 同上命令，自动识别为图文并下载图片（`--image-output` 指定目录） |
 | 小红书视频/图文 | `python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"` |
+| 元数据收集（本地源） | `python scripts/sync_metadata.py --report` / `--apply` |
+| 元数据同步到飞书表 | `python scripts/sync_metadata.py --apply --feishu-token <token> --feishu-table <table_id>` |
+| 浏览器补抓元数据 | `python scripts/platform_meta_browser.py --platform douyin --ids <txt> --out <jsonl>` |
 
 推荐使用 `cli.py`：它发现来源、写入 manifest，并用 SQLite 规划可恢复任务。任务是否"已产出"同时看**产物文件是否存在**——多台电脑共用同一份产物根时，靠它天然跨机去重，不必共享任务库。旧入口仍保留 `--space`、`--favorites`、`--output`、`--no-meta`、`--backend` 等选项；`--favorites` 读取项目根目录的 `videos_fav.json`。
 
@@ -71,9 +74,18 @@ python scripts/run_subtitle_batch.py
 
 图文帖的 `video.play_addr` 指向背景音乐而不是内容本身，解析时必须排除。
 
+成功后会把 `(platform="douyin", video_id=...)` 写进 `data/subtitle_tasks.db` 与 `data/platform_videos_manifest.json`（视频记 `asr_success`，图文记 `assets_downloaded`），默认已存在 .md 时跳过；需要重新下载时加 `--overwrite`。
+
 ```powershell
 python scripts/douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=7687559858779351972&showTab=favorite_collection"
 python scripts/douyin_cli.py --url "https://www.douyin.com/video/7687559858779351972" --image-output "10_raw\05_抖音笔记图片"
+```
+
+把旧的 `10_raw/02_抖音视频笔记` 或 `10_raw/03_小红书收藏夹` 中已存在、但未登记到状态库的文件批量回填：
+
+```powershell
+python scripts/backfill_platform_records.py            # 实际写 SQLite + platform manifest
+python scripts/backfill_platform_records.py --dry-run  # 只扫描、不写库
 ```
 
 ## 小红书视频和图文
@@ -95,6 +107,8 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/video/768755985877935
 
 **无语音的视频改为抽关键帧。** 没有音频轨的视频不能进 ASR（ffmpeg 抽音频那步就会失败），识别不出内容时也按无语音处理。此时每 2 秒抽 1 帧（缩到 540 宽 webp，最多 24 帧）存进产物根的 `images/`，正文写成帧图引用并注明原因；视频照旧删除。这样内容不会丢，形态与图文笔记一致。
 
+成功后会把 `(platform="xiaohongshu", video_id=note_id)` 写进 `data/subtitle_tasks.db` 与 `data/platform_videos_manifest.json`（视频记 `asr_success`，图文记 `assets_downloaded`）。
+
 ```powershell
 python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
@@ -104,6 +118,26 @@ python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<�
 若返回 `LOGIN_REQUIRED`，先运行 `python scripts/open_xiaohongshu_login.py`，完成一次人工登录后再重试。
 
 不要试图复用用户日常 Chrome 的登录态：Chrome 运行时会把 `Default/Network/Cookies` 独占锁住，`shutil.copy2` 报 PermissionError、SQLite 读不了、`esentutl` 报 `JET_errFileAccessDenied(-1032)`。CDP 通道用项目自己的 `.chrome-xiaohongshu` profile 即可。
+
+## 元数据流水线
+
+元数据（标题、UP主、发布时间、下载时间）走独立流水线，与字幕抓取解耦：
+
+```powershell
+python scripts\sync_metadata.py --report                    # 只看本地源覆盖率
+python scripts\sync_metadata.py --apply                     # 写入状态库与 manifest
+python scripts\sync_metadata.py --apply --feishu-token <t> --feishu-table <id>
+```
+
+各平台的元数据分散在不同地方：B站在 md frontmatter（注意有 `bvid:` 和 `bv:` 两种格式）、
+`videos_manifest.json` 和 `download_list.json`；抖音在"抖珍藏"本地库的
+`data/.appdata/db_*.js`（`window.x_base64="<gzip+base64 JSON>"`）；小红书本地无源。
+
+缺失的字段用 `scripts/platform_meta_browser.py` 浏览器补抓。抖音和 B站都是 JS 渲染，
+纯 HTTP 拿不到元数据。
+
+飞书多维表格的读写细节（分批限制、分页、建表前需 `auth login`）和各平台抓取坑，
+见 [docs/metadata-pipeline.md](docs/metadata-pipeline.md)。
 
 ## 处理规则
 
@@ -126,6 +160,7 @@ python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<�
 - `scripts/xiaohongshu_media.py` / `scripts/xiaohongshu_cli.py`：小红书视频和图文媒体发现、下载与元数据清单。
 - `scripts/xiaohongshu_cdp.py`：以普通方式启动 Chrome 并暴露 CDP，供 Playwright 附着读取。
 - `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
+- `scripts/platform_meta.py` / `scripts/platform_meta_browser.py` / `scripts/feishu_base.py` / `scripts/sync_metadata.py`：元数据收集、浏览器兜底抓取、飞书表读写与流水线入口。
 
 修改抓取、状态或风控逻辑后运行：
 

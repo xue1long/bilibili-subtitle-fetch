@@ -6,10 +6,47 @@
 """
 
 import os
+import re
 import subprocess
 from pathlib import Path
 
 from transcribe_video import transcribe_video
+
+
+# 部分环境的 ffprobe 实为 ffmpeg 副本（PATH 上被同名文件遮蔽），
+# 不认识 -show_entries / -select_streams；此时改用 ffmpeg -i 的输出来探测。
+_FFPROBE_UNSUPPORTED = ("Unrecognized option", "Option not found")
+_DURATION_PATTERN = re.compile(r"Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)")
+_AUDIO_STREAM_PATTERN = re.compile(r"Stream #\d+:\d+.*: Audio:", re.MULTILINE)
+_ANY_STREAM_PATTERN = re.compile(r"Stream #\d+:\d+", re.MULTILINE)
+
+
+def _ffprobe_unavailable(stderr: str) -> bool:
+    """ffprobe 是否因为不认识选项而失败（而不是文件本身有问题）。"""
+    return any(marker in stderr for marker in _FFPROBE_UNSUPPORTED)
+
+
+def _ffmpeg_probe_text(video_path: Path) -> str:
+    """用 ffmpeg -i 读容器信息：ffprobe 不支持 -show_* 时的回退路径。"""
+    result = subprocess.run(["ffmpeg", "-i", str(video_path)], capture_output=True)
+    return result.stderr.decode(errors="ignore")
+
+
+def _parse_duration(probe_text: str) -> float:
+    match = _DURATION_PATTERN.search(probe_text)
+    if not match:
+        return 0.0
+    hours, minutes, seconds = match.groups()
+    return int(hours) * 3600 + int(minutes) * 60 + float(seconds)
+
+
+def _parse_has_audio_stream(probe_text: str) -> bool:
+    if _AUDIO_STREAM_PATTERN.search(probe_text):
+        return True
+    if _ANY_STREAM_PATTERN.search(probe_text):
+        return False
+    # 读不出任何流说明文件不是有效视频，不能当成「无音频轨」
+    raise RuntimeError("视频探测失败: ffmpeg 无法读取该文件")
 
 
 def plain_text(srt: str) -> str:
@@ -30,12 +67,15 @@ def probe_duration(video_path: Path) -> float:
          "-of", "csv=p=0", str(video_path)],
         capture_output=True,
     )
-    if result.returncode:
-        return 0.0
-    try:
-        return float(result.stdout.decode(errors="ignore").strip().split(",")[0])
-    except (ValueError, IndexError):
-        return 0.0
+    if not result.returncode:
+        try:
+            return float(result.stdout.decode(errors="ignore").strip().split(",")[0])
+        except (ValueError, IndexError):
+            return 0.0
+    stderr = result.stderr.decode(errors="ignore")
+    if _ffprobe_unavailable(stderr):
+        return _parse_duration(_ffmpeg_probe_text(video_path))
+    return 0.0
 
 
 def has_audio_stream(video_path: Path) -> bool:
@@ -49,10 +89,13 @@ def has_audio_stream(video_path: Path) -> bool:
          "-show_entries", "stream=index", "-of", "csv=p=0", str(video_path)],
         capture_output=True,
     )
-    if result.returncode:
-        detail = result.stderr.decode(errors="ignore")[-200:]
-        raise RuntimeError(f"视频探测失败: {detail or 'ffprobe 无法读取该文件'}")
-    return bool(result.stdout.decode(errors="ignore").strip())
+    if not result.returncode:
+        return bool(result.stdout.decode(errors="ignore").strip())
+    stderr = result.stderr.decode(errors="ignore")
+    if _ffprobe_unavailable(stderr):
+        return _parse_has_audio_stream(_ffmpeg_probe_text(video_path))
+    detail = stderr[-200:]
+    raise RuntimeError(f"视频探测失败: {detail or 'ffprobe 无法读取该文件'}")
 
 
 def extract_key_frames(

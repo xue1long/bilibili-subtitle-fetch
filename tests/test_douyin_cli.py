@@ -74,7 +74,7 @@ class DouyinCliTest(unittest.TestCase):
                 with patch.object(douyin_cli, "scratch_dir", return_value=scratch):
                     with patch.object(douyin_cli, "download_video", side_effect=fake_download):
                         with patch.object(video_artifact, "transcribe_video", return_value="1\n00:00:00,000 --> 00:00:01,000\n字幕\n"):
-                            output = douyin_cli.run(URL, Path(directory), model_size="small")
+                            output = douyin_cli.run(URL, Path(directory), model_size="small", state_root=Path(directory))
 
             content = output.read_text(encoding="utf-8")
             self.assertEqual(output.name, "DY123456.md")
@@ -98,7 +98,7 @@ class DouyinCliTest(unittest.TestCase):
                     with patch.object(douyin_cli, "download_video", side_effect=fake_download):
                         with patch.object(video_artifact, "transcribe_video", side_effect=douyin_cli.VideoTranscriptionError("ASR_FAILED", "ASR failed")):
                             with self.assertRaises(douyin_cli.DouyinCliError):
-                                douyin_cli.run(URL, Path(directory))
+                                douyin_cli.run(URL, Path(directory), state_root=Path(directory))
             self.assertFalse((Path(directory) / "DY123456.md").exists())
             # 转录失败也要清掉暂存的视频
             self.assertEqual(list(scratch.glob("**/*.mp4")), [])
