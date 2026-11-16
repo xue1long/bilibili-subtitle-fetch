@@ -78,7 +78,9 @@ $env:BILIBILI_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-
 # 随后跑提取（见第 7 节）
 ```
 
-> 其他可选路径覆盖（见 README）：`BILIBILI_SFETCH_ROOT` / `BILIBILI_SFETCH_EDGE_PROFILE` / `BILIBILI_SFETCH_CHROMEDRIVER` / `BILIBILI_SFETCH_CHROME_BIN`。
+> 其他可选路径覆盖（完整清单见 README 的「环境变量全集」表）：`BILIBILI_SFETCH_ROOT` / `BILIBILI_SFETCH_EDGE_PROFILE` / `BILIBILI_CHROME_BINARY` / `BILIBILI_CHROMEDRIVER` / `BILIBILI_HEADLESS` / `BILIBILI_BROWSER_BACKEND` / `BILIBILI_SFETCH_CHROMEDRIVER` / `BILIBILI_SFETCH_CHROME_BIN`。
+>
+> 注意：Selenium 回退路径读的是 `BILIBILI_CHROME_BINARY` / `BILIBILI_CHROMEDRIVER`；带 `SFETCH_` 的那两个只在 `_driver_patch.py` 的兼容补丁里生效，两组不要混用。
 
 ## 6. 跳过首次运行向导（⚠️ 后台 / CI 必看）
 
@@ -152,4 +154,4 @@ $env:XHS_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-fetch
 
 如果返回 `LOGIN_REQUIRED`，**不要**运行 `open_xiaohongshu_login.py` 人工登录（它会用 Playwright 自带 Chromium 打开系统 Chrome 创建的 profile 并污染会话）。笔记不需要登录态，正解是把上述环境变量指向一个全新的空目录后重跑；批量任务连续报错时先停任务。
 
-结果保存在 `<产物根>\03_小红书\<笔记ID>\`（产物根默认 `10_raw\`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）。视频为 `video.mp4`，图文为按原比例缩小 50% 的 `images\*.webp`，`<笔记ID>.md` 是包含标题、作者、简介、资源数量和相对路径清单的元数据文件。签名 URL 不写入元数据；已有同名目录需追加 `--overwrite`。
+结果保存在 `<产物根>\03_小红书\<笔记ID>\`（产物根默认 `10_raw\`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）。**视频笔记不保留 `video.mp4`**——视频只落在项目本地暂存区 `.scratch\`，转录成功后立即删除，产物根只留转录正文与抽帧图；图文笔记为按原比例缩小 50% 的 `images\*.webp`，`<笔记ID>.md` 是包含标题、作者、简介、资源数量和相对路径清单的元数据文件。签名 URL 不写入元数据；已有同名目录需追加 `--overwrite`。

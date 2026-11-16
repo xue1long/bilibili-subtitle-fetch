@@ -55,7 +55,9 @@ ERROR_HINTS = {
     "SUBTITLE_API_FAILED": "字幕接口调用失败",
     "LOGIN_REQUIRED": "需要登录态，已过期",
     "RATE_LIMITED": "触发平台风控限流",
-    "BROWSER_LAUNCH_FAILED": "浏览器启动失败",
+    "BROWSER_START_FAILED": "浏览器启动失败",
+    "PAGE_LOAD_FAILED": "页面加载失败",
+    "UNKNOWN": "未知失败",
 }
 
 MEDIA_SUFFIXES = {".md", ".srt", ".vtt", ".mp4", ".webp", ".jpg", ".jpeg", ".png", ".mp3", ".wav", ".m4a"}

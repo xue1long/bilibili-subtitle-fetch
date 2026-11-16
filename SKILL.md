@@ -120,7 +120,7 @@ python scripts\xhs_board_batch.py --notes .scratch\board_notes.json
 1. 来源按 BV 号去重；统一入口跳过 SQLite 中成功的任务。
 2. 浏览器启动或页面加载失败最多重试一次。
 3. 登录失败、浏览器启动失败和熔断中的限流任务标记为暂停；未访问的视频不标记为失败。
-4. `SUBTITLE_NOT_OBSERVED`、`NO_SUBTITLE`、`SUBTITLE_API_FAILED`、`LOGIN_REQUIRED`、`RATE_LIMITED` 等错误码必须保留原语义。
+4. 错误码必须保留原语义。字幕链路的权威定义在 `scripts/bili_guard.py` 的 `FailureKind`：`SUBTITLE_NOT_OBSERVED`、`NO_SUBTITLE`、`SUBTITLE_API_FAILED`、`LOGIN_REQUIRED`、`RATE_LIMITED`、`BROWSER_START_FAILED`、`PAGE_LOAD_FAILED`、`UNKNOWN`。抖音与小红书链路另有 `VIDEO_NOT_FOUND`、`ASSET_NOT_FOUND`、`NOTE_NOT_FOUND`、`VIDEO_DOWNLOAD_FAILED`、`ASSET_DOWNLOAD_FAILED`、`VIDEO_TRANSCRIPTION_FAILED`、`AUDIO_EXTRACT_FAILED`、`ASR_FAILED`、`IMAGE_RESIZE_FAILED`、`METADATA_PARTIAL`、`OUTPUT_EXISTS`、`OUTPUT_FAILED`。
 5. 只有真实 412/429 计入熔断；普通无字幕只影响当前视频。
 6. 监控记录只保存结构化 probe 和耗时，不保存 Cookie、Authorization header、响应 body、页面文本或原始响应 URL。
 7. 不处理 CAPTCHA，不轮换代理/IP，不伪装浏览器指纹。

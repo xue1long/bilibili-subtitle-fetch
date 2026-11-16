@@ -161,7 +161,7 @@ python scripts\transcribe_video.py "D:\videos\clip.mp4" --model small --output "
 python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
 
-请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）；合集页 `/board/<合集ID>/<笔记ID>` 的两段 ID 也支持。默认输出到 `<产物根>/03_小红书/<笔记ID>/`（产物根默认 `10_raw/`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）：视频笔记包含 `video.mp4`，图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片；同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令优先走「普通 Chrome + CDP」通道，默认使用干净的 `.chrome-xiaohongshu-clean` profile（不需要登录态）；遇到 `LOGIN_REQUIRED` 时换一个全新空 profile，不要人工登录。可用 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。
+请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）；合集页 `/board/<合集ID>/<笔记ID>` 的两段 ID 也支持。默认输出到 `<产物根>/03_小红书/<笔记ID>/`（产物根默认 `10_raw/`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）：**视频笔记不保留视频文件**——视频只落在项目本地暂存区 `.scratch/`，转录成功后立即删除，产物根只留转录正文与抽帧图；图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片。同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令优先走「普通 Chrome + CDP」通道，默认使用干净的 `.chrome-xiaohongshu-clean` profile（不需要登录态）；遇到 `LOGIN_REQUIRED` 时换一个全新空 profile，不要人工登录。可用 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。
 
 批量下载合集图文笔记：`python scripts\xhs_board_batch.py --notes <清单.json>`，清单格式与断点续跑见 [SKILL.md](SKILL.md)。
 
@@ -210,7 +210,22 @@ python scripts/run_subtitle_batch.py --min-delay 8 --max-delay 15 \
 }
 ```
 
-`SUBTITLE_NOT_OBSERVED` 表示没有观察到字幕请求；`NO_SUBTITLE` 表示请求成功但没有字幕；`SUBTITLE_API_FAILED` 表示请求失败或状态未知；`LOGIN_REQUIRED` 表示登录态不可用；`RATE_LIMITED` 表示实际观测到 412/429。只有连续达到阈值的 412/429 才打开全局熔断，普通字幕缺失只记录为当前视频失败，不暂停后续视频。
+字幕链路的错误码（权威定义在 `scripts/bili_guard.py` 的 `FailureKind`）：
+
+| 错误码 | 含义 |
+|---|---|
+| `SUBTITLE_NOT_OBSERVED` | 没有观察到字幕请求（可能没有 AI 字幕，或页面尚未加载完成） |
+| `NO_SUBTITLE` | 请求成功但没有字幕，需要 ASR 兜底 |
+| `SUBTITLE_API_FAILED` | 字幕接口调用失败或状态未知 |
+| `LOGIN_REQUIRED` | 登录态不可用 |
+| `RATE_LIMITED` | 实际观测到 412/429 |
+| `BROWSER_START_FAILED` | 浏览器启动失败 |
+| `PAGE_LOAD_FAILED` | 页面加载失败 |
+| `UNKNOWN` | 无法归类的失败 |
+
+只有连续达到阈值的 412/429 才打开全局熔断，普通字幕缺失只记录为当前视频失败，不暂停后续视频。
+
+抖音与小红书链路另有各自的错误码（`VIDEO_NOT_FOUND`、`ASSET_NOT_FOUND`、`NOTE_NOT_FOUND`、`VIDEO_DOWNLOAD_FAILED`、`ASSET_DOWNLOAD_FAILED`、`VIDEO_TRANSCRIPTION_FAILED`、`AUDIO_EXTRACT_FAILED`、`ASR_FAILED`、`IMAGE_RESIZE_FAILED`、`METADATA_PARTIAL`、`OUTPUT_EXISTS`、`OUTPUT_FAILED`），命名与语义同样必须保持稳定。
 
 监控只保存上述结构化证据，不持久化 cookies、Authorization headers、响应 body、页面文本或原始响应 URL。
 
@@ -223,7 +238,28 @@ pip install faster-whisper playwright
 python scripts/rescue_one_subtitle.py BV1xxxxxxxxxx --model small
 ```
 
-系统需要可执行的 `ffmpeg`。可通过 `BILIBILI_SFETCH_ROOT`、`BILIBILI_SFETCH_CHROME_PROFILE`、`BILIBILI_SFETCH_EDGE_PROFILE`、`BILIBILI_SFETCH_CHROMEDRIVER` 和 `BILIBILI_SFETCH_CHROME_BIN` 覆盖默认路径。
+系统需要可执行的 `ffmpeg`。环境变量全集如下（**变量名必须完全一致**）：
+
+| 变量 | 作用 | 读取位置 |
+|---|---|---|
+| `BILIBILI_SFETCH_ROOT` | 项目根目录覆盖 | `runtime_paths.py:11` |
+| `BILIBILI_SFETCH_RAW_DIR` | 产物根目录（可写未展开的 `%OneDriveConsumer%\...`） | `runtime_paths.py:28` |
+| `BILIBILI_SFETCH_CHROME_PROFILE` | B站 Chrome profile 目录 | `runtime_paths.py:72` |
+| `BILIBILI_SFETCH_EDGE_PROFILE` | Edge profile 目录 | `runtime_paths.py:61` |
+| `BILIBILI_CHROME_BINARY` | Chrome 可执行文件（Selenium 回退路径） | `subtitle_extractor.py:236` |
+| `BILIBILI_CHROMEDRIVER` | chromedriver 可执行文件（Selenium 回退路径） | `subtitle_extractor.py:247` |
+| `BILIBILI_HEADLESS` | 设为 `1` 时给 Selenium 传 `--headless=new` | `subtitle_extractor.py:239` |
+| `BILIBILI_BROWSER_BACKEND` | 字幕抓取后端，默认 `playwright` | `subtitle_extractor.py:147` |
+| `BILIBILI_SFETCH_CHROMEDRIVER` | chromedriver 路径（**仅** `_driver_patch.py` 生效） | `_driver_patch.py:35` |
+| `BILIBILI_SFETCH_CHROME_BIN` | Chrome 路径（**仅** `_driver_patch.py` 生效） | `_driver_patch.py:36` |
+| `DOUYIN_SFETCH_CHROME_PROFILE` | 抖音登录 profile 目录 | `douyin_cli.py:31` |
+| `XHS_SFETCH_CHROME_PROFILE` | 小红书 Chrome profile 目录 | `xiaohongshu_media.py:315` |
+| `XHS_SFETCH_CDP_PROFILE` | 小红书 CDP 通道专用 profile（优先级更高） | `xiaohongshu_media.py:317` |
+| `HF_HUB_CACHE` | faster-whisper 模型缓存目录 | `subtitle_rescue.py:101` |
+| `HF_HUB_OFFLINE` | 设为 `1` 时强制离线加载模型 | `subtitle_rescue.py:103` |
+
+> 注意：`BILIBILI_SFETCH_CHROMEDRIVER` / `BILIBILI_SFETCH_CHROME_BIN` 只在 `_driver_patch.py` 的
+> Selenium 兼容补丁里被读取；Selenium 回退路径本身读的是 `BILIBILI_CHROMEDRIVER` / `BILIBILI_CHROME_BINARY`，两组不要混用。
 
 ---
 
@@ -323,21 +359,36 @@ bilibili-subtitle-fetch/
 ├── SKILL.md                       # 字幕抓取 skill
 ├── README.md                      # 本文件
 ├── SETUP.md                       # Windows/PowerShell 初始化
+├── CONTEXT.md                     # 领域词汇表
 ├── requirements.txt               # Python 依赖
 ├── LICENSE                        # MIT
 ├── .gitignore
 └── scripts/
     ├── cli.py                     # 🆕 统一入口（单视频 / 收藏夹 URL / UP 空间）
     ├── subtitle_extractor.py      # 兼容入口（默认 Playwright 监听字幕；Selenium 兼容回退）
+    ├── subtitle_rescue.py         # 字幕救援流程
     ├── open_playwright_login.py   # 打开登录窗口，写入项目专用 profile（.chrome-bilibili）
+    ├── open_xiaohongshu_login.py  # ⚠️ 小红书专用，已弃用（笔记不需要登录态，见 SKILL.md）
     ├── extract_meta.py            # 🆕 v1.3 vendor：抓视频元数据（自 bilibili-video-meta v1.2）
     ├── prepend_meta.py            # 🆕 v1.2：把元数据拼成 frontmatter 写到字幕顶端
     ├── fetch_search_bvids.py      # 🆕 搜索结果抓 BV 号
     ├── run_subtitle_batch.py      # 🆕 批量下载字幕
     ├── rescue_one_subtitle.py     # 🆕 音频 ASR 救援
-    ├── runtime_paths.py           # 运行时路径解析
+    ├── runtime_paths.py           # 运行时路径解析（产物根 / 暂存区 / profile）
+    ├── bili_guard.py              # 错误码定义（FailureKind）、限流与熔断
+    ├── build_download_viewer.py   # 生成静态产物快照 data/download_viewer.html
+    ├── douyin_cli.py              # 抖音单条下载入口
+    ├── douyin_media.py            # 抖音媒体发现（匿名优先）
+    ├── xiaohongshu_cli.py         # 小红书单条视频/图文下载入口
+    ├── xiaohongshu_media.py       # 小红书资源发现、下载与元数据
+    ├── xiaohongshu_cdp.py         # 普通方式启动 Chrome 并暴露 CDP
+    ├── xhs_board_batch.py         # 合集图文笔记批量下载
+    ├── transcribe_video.py        # 本地视频 → 音频 → ASR 转录
+    ├── video_artifact.py          # 视频产物组装（转录正文或关键帧）
+    ├── playwright_extract_subtitle.py # Playwright 字幕提取底层
+    ├── _driver_patch.py           # Selenium 驱动的本地路径补丁
     ├── backends/                  # 抓取后端：playwright_subtitle / asr_rescue
-    ├── pipeline/                  # 批处理流水线
+    ├── pipeline/                  # 批处理流水线（任务模型 / 规划器）
     ├── sources/                   # 视频源解析（空间 / 收藏夹 / 搜索）
     └── storage/                   # manifest / SQLite / 旧 JSON 迁移
 ```
