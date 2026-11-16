@@ -1,4 +1,4 @@
-"""用普通方式启动的 Chrome 承载小红书会话，再通过 CDP 交给 Playwright 读取。
+"""用普通方式启动的 Chrome 承载小红书页面，再通过 CDP 交给 Playwright 读取。
 
 为什么不用 Playwright 直接开浏览器：
 
@@ -9,7 +9,12 @@
 
 可行组合：用**普通方式**启动 Chrome（只加 `--remote-debugging-port`，不加任何自动化
 参数），再用 CDP 让 Playwright 附着上去。整个过程不伪造指纹、不改 UA、不处理
-验证码，只复用本机已有的登录态。
+验证码。
+
+实测结论（2026-11-13）：带有效 `xsec_token` 的链接**不需要登录态**，用全新的空
+profile（零 cookie）即可读出完整笔记；真正被拦的是浏览器 automation 标记，以及被
+高频请求或版本降级污染过的 profile。所以默认使用 `.chrome-xiaohongshu-clean`，
+连续出现 `LOGIN_REQUIRED` 时换成另一个全新空目录，不要人工登录。
 """
 
 import os

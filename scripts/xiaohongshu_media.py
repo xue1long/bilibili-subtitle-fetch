@@ -233,7 +233,11 @@ def _normalize_media_url(url: str) -> str:
 
 
 async def _discover_page_cdp(source_url: str, endpoint: str) -> dict:
-    """附着到普通方式启动的 Chrome，复用它的登录态。"""
+    """附着到普通方式启动的 Chrome，读取页面的 __INITIAL_STATE__。
+
+    带有效 xsec_token 的链接不需要登录态；页面先弹登录窗口时后台仍在加载
+    笔记数据，因此轮询等 imageList 就绪再判定，取不到才返回 LOGIN_REQUIRED。
+    """
     from playwright.async_api import async_playwright
 
     async with async_playwright() as playwright:

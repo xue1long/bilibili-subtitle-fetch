@@ -77,7 +77,7 @@ python scripts\cli.py --favorite-url "..." --retry-failed
 - ASR 需要 `faster-whisper` 和系统 `ffmpeg`；空间模式需要 `yt-dlp`。
 - 抖音流程先匿名解析 `aweme/detail` 接口拿目标帖；失败才使用旧页面扫描、`yt-dlp` 和可选的 `.chrome-douyin` profile，环境变量 `DOUYIN_SFETCH_CHROME_PROFILE` 可覆盖。
 - 小红书流程用「普通 Chrome + CDP」发现资源（`scripts/xiaohongshu_cdp.py`）：Playwright 自带 Chromium 带 `--enable-automation`，会被小红书风控跳登录；普通方式启动的 Chrome 不带自动化标记，headless 优先、不弹窗口。默认 profile 是 `.chrome-xiaohongshu-clean`（旧的 `.chrome-xiaohongshu` 已被污染，不要再用），环境变量 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 可覆盖；`LOGIN_REQUIRED` 的正解是换干净 profile，不是人工登录。签名 CDN URL 只在内存中使用。
-- 小红书入口使用分享页完整 URL；无 Cookie 页面跳转 `/login` 时返回 `LOGIN_REQUIRED`，不能把登录页误判为资源不存在。
+- 小红书入口使用带 `xsec_token` 的完整分享 URL；笔记不需要登录态（实测零 cookie 的空 profile 即可读出完整图集）。页面先弹登录窗口时后台仍在加载笔记，流程会轮询等 `__INITIAL_STATE__` 的 `imageList` 就绪再判定，取不到才算 `LOGIN_REQUIRED`，不能一看到 `/login` 就误判为资源不存在。
 - 不提交 `.chrome-bilibili/`、`.venv/`、字幕、音频、模型缓存或账号状态。
 - 不记录或提交 Cookie、Authorization header、响应 body、页面文本和原始响应 URL；不绕过 CAPTCHA、付费限制或风控。
 
