@@ -1,3 +1,4 @@
+import json
 import subprocess
 import sys
 import unittest
@@ -147,6 +148,163 @@ class BuildVideoArtifactTest(unittest.TestCase):
                 body, extra = build_video_artifact(video, root / "images", root, interval=1.0, max_frames=4)
             self.assertIn("有音频轨但未识别出内容", body)
             self.assertEqual(extra["speech"], "none")
+
+
+class ArtifactPathsTest(unittest.TestCase):
+    def test_directory_layout(self):
+        md, frames = video_artifact.artifact_paths(Path("/out"), "abc", flat=False)
+        self.assertEqual(md, Path("/out/abc/abc.md"))
+        self.assertEqual(frames, Path("/out/abc/images"))
+
+    def test_flat_layout(self):
+        md, frames = video_artifact.artifact_paths(Path("/out"), "abc", flat=True)
+        self.assertEqual(md, Path("/out/abc.md"))
+        self.assertEqual(frames, Path("/out/images/abc"))
+
+
+class CliTest(unittest.TestCase):
+    """CLI 把本地视频变成合规产物：有语音转录，无语音抽帧。"""
+
+    def _video(self, root: Path, name: str = "12345.mp4") -> Path:
+        path = root / name
+        path.write_bytes(b"fake")
+        return path
+
+    def test_transcribed_video_writes_markdown_and_removes_source(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+            with patch.object(video_artifact, "build_video_artifact",
+                              return_value=("正文", {"transcript_model": "small"})):
+                rc = video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                    "--platform", "douyin",
+                ])
+            self.assertEqual(rc, 0)
+            md = out / "12345" / "12345.md"
+            self.assertTrue(md.exists())
+            content = md.read_text(encoding="utf-8")
+            self.assertIn("platform: douyin", content)
+            self.assertIn("video_id: 12345", content)
+            self.assertIn("transcript_model: small", content)
+            self.assertIn("正文", content)
+            # 视频是中间产物，用完即删
+            self.assertFalse(video.exists())
+
+    def test_keep_video_leaves_the_source_alone(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+            with patch.object(video_artifact, "build_video_artifact",
+                              return_value=("正文", {"transcript_model": "small"})):
+                video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                    "--keep-video",
+                ])
+            self.assertTrue(video.exists())
+
+    def test_keyframe_video_records_assets(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+
+            def fake_build(video_path, frames_dir, md_dir, model_size="small", **kwargs):
+                frames_dir.mkdir(parents=True, exist_ok=True)
+                (frames_dir / "01.webp").write_bytes(b"frame")
+                return ("![帧 1](images/01.webp)", {"frame_count": 1, "speech": "none"})
+
+            with patch.object(video_artifact, "build_video_artifact", side_effect=fake_build):
+                video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                ])
+            content = (out / "12345" / "12345.md").read_text(encoding="utf-8")
+            self.assertIn("asset_count: 1", content)
+            self.assertIn("- images/01.webp", content)
+
+    def test_flat_layout_and_manifest_metadata(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+            manifest = root / "manifest.json"
+            manifest.write_text(json.dumps({
+                "sources": {"douyin": {"12345": {"title": "标题", "uploader": "作者"}}}
+            }), encoding="utf-8")
+            with patch.object(video_artifact, "build_video_artifact",
+                              return_value=("正文", {"transcript_model": "small"})):
+                video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                    "--manifest", str(manifest),
+                    "--flat",
+                ])
+            md = out / "12345.md"
+            self.assertTrue(md.exists())
+            content = md.read_text(encoding="utf-8")
+            self.assertIn("title: 标题", content)
+            self.assertIn("uploader: 作者", content)
+
+    def test_existing_product_is_skipped_unless_overwrite(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+            (out / "12345").mkdir(parents=True)
+            (out / "12345" / "12345.md").write_text("已有", encoding="utf-8")
+            with patch.object(video_artifact, "build_video_artifact") as build:
+                rc = video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                ])
+            self.assertEqual(rc, 0)
+            build.assert_not_called()
+            self.assertTrue(video.exists())
+
+    def test_dry_run_changes_nothing(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = self._video(root)
+            out = root / "out"
+            with patch.object(video_artifact, "build_video_artifact") as build:
+                video_artifact.main([
+                    "--video", str(video),
+                    "--output-dir", str(out),
+                    "--dry-run",
+                ])
+            build.assert_not_called()
+            self.assertTrue(video.exists())
+            self.assertFalse(out.exists())
+
+    def test_empty_source_is_skipped(self):
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            video = root / "12345.mp4"
+            video.write_bytes(b"")
+            rc = video_artifact.main([
+                "--video", str(video),
+                "--output-dir", str(root / "out"),
+            ])
+            self.assertEqual(rc, 0)
 
 
 if __name__ == "__main__":

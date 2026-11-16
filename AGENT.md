@@ -11,6 +11,7 @@
 - `scripts/douyin_cli.py`：抖音单条下载，视频走音频提取 + faster-whisper 转录，图文走图片下载 + 元数据清单。
 - `scripts/xiaohongshu_cli.py`：小红书单条视频/图文下载和元数据清单。
 - `scripts/open_xiaohongshu_login.py`：小红书人工登录窗口。**已弃用，不要运行** —— 小红书笔记不需要登录态，且该脚本用 Playwright 自带 Chromium 打开 profile，会降级写入 `Last Version` 并污染会话；它的默认 profile 也仍指向已被污染的旧 `.chrome-xiaohongshu`。
+- `scripts/video_artifact.py`：把**本地已有**的视频变成合规产物（有语音走 ASR，无语音抽关键帧），产出 markdown 并删除源视频。
 - `scripts/sources/`：视频来源适配器。
 - `scripts/pipeline/`：任务模型和去重规划。
 - `scripts/backends/`：Playwright 字幕与 ASR 后端。
@@ -20,12 +21,20 @@
 - `10_raw/02_抖音视频转录/`：抖音视频字幕输出目录。
 - `10_raw/05_抖音笔记图片/DY<视频ID>/`：抖音图文图片和 `<视频ID>.md` 输出目录；`.md` 正文是 markdown 图片引用。
 - `10_raw/03_小红书/<笔记ID>/`：小红书媒体和 `<笔记ID>.md` 输出目录；`.md` 正文写 markdown 资源引用。
+- `data/platform_videos_manifest.json`：抖音/小红书的来源清单（B 站仍在 `data/videos_manifest.json`）。
+- `data/subtitle_tasks.db`：所有平台的任务状态主库，主键为 `(platform, video_id)`；`SQLiteStore` 在加载时自动把老的 `videos.bvid` 单列主键升级到合成主键，旧 B 站记录以 `platform="bilibili"` 保留。
+- `scripts/backfill_platform_records.py`：扫描产物根下的 `02_抖音视频转录`（旧名 `02_抖音视频笔记`）与 `03_小红书`（旧名 `03_小红书收藏夹`），把已存在的 `.md`/`.mp4` 回填到 `data/platform_videos_manifest.json` 与 `data/subtitle_tasks.db`。
+- `scripts/platform_meta.py`：读取各平台本地元数据源（B站 frontmatter/manifest/download_list、抖珍藏本地库），归一化成统一的 `{video_id: {...}}` 结构。
+- `scripts/platform_meta_browser.py`：抖音/B站元数据的浏览器兜底抓取，结果落 JSONL 缓存，失败项可重跑。
+- `scripts/feishu_base.py`：`lark-cli` 封装——建表、建字段、分页读记录、批量增改记录、协作者授权。
+- `scripts/sync_metadata.py`：元数据流水线入口——本地源/浏览器结果 → 状态库与 manifest → 飞书多维表格。
 
 ## 技能索引
 
 | Skill | 用途 |
 |---|---|
 | [SKILL.md](SKILL.md) | B 站字幕抓取、批量下载和 ASR 救援的操作约定 |
+| [docs/metadata-pipeline.md](docs/metadata-pipeline.md) | 元数据收集与飞书多维表格同步，含各平台来源与踩坑记录 |
 
 ## 常用命令
 
