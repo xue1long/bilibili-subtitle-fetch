@@ -1,7 +1,5 @@
-from .models import SubtitleTask, TaskStatus
+from .models import SUCCESS_STATUSES, SubtitleTask, TaskStatus
 
-
-SUCCESS_STATUSES = {"success", "native_success", "asr_success"}
 PAUSED_STATUSES = {"paused"}
 
 

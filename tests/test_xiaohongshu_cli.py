@@ -147,6 +147,58 @@ class XiaohongshuCliTest(unittest.TestCase):
             self.assertEqual(output.name, f"{note_id}.md")
             self.assertTrue(output.exists())
 
+    def test_temp_dir_lives_in_scratch_not_output_root(self):
+        """暂存区必须落本地，否则产物根（可能在同步盘上）会残留 xhs-* 目录。"""
+        seen = {}
+
+        def fake_discover(url, profile_dir):
+            return ({"note_type": "image"}, None, ["https://cdn/01.webp"])
+
+        def fake_download(note, image_urls, output_dir):
+            seen["work_dir"] = output_dir
+            image_dir = output_dir / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            (image_dir / "01.webp").write_bytes(b"image")
+            return {"asset_count": 1, "asset_files": ["images/01.webp"]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "产物根"
+            scratch = root / "本地暂存"
+            with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
+                with patch.object(xiaohongshu_cli, "download_assets", side_effect=fake_download):
+                    with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
+                        xiaohongshu_cli.run(IMAGE_URL, output_dir)
+
+            # 工作目录必须在暂存区下面，不能在产物根下面
+            self.assertTrue(str(seen["work_dir"]).startswith(str(scratch)))
+            # 产物根里不能残留 xhs-* 临时目录
+            leftovers = [p.name for p in output_dir.iterdir() if p.name.startswith("xhs-")]
+            self.assertEqual(leftovers, [], f"产物根残留临时目录: {leftovers}")
+
+    def test_scratch_temp_dir_is_cleaned_up(self):
+        """暂存区的 xhs-* 临时目录用完即删。"""
+        def fake_discover(url, profile_dir):
+            return ({"note_type": "image"}, None, ["https://cdn/01.webp"])
+
+        def fake_download(note, image_urls, output_dir):
+            image_dir = output_dir / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            (image_dir / "01.webp").write_bytes(b"image")
+            return {"asset_count": 1, "asset_files": ["images/01.webp"]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            output_dir = root / "产物根"
+            scratch = root / "本地暂存"
+            with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
+                with patch.object(xiaohongshu_cli, "download_assets", side_effect=fake_download):
+                    with patch.object(xiaohongshu_cli, "scratch_dir", return_value=scratch):
+                        xiaohongshu_cli.run(IMAGE_URL, output_dir)
+
+            leftovers = [p.name for p in scratch.iterdir() if p.name.startswith("xhs-")]
+            self.assertEqual(leftovers, [], f"暂存区残留临时目录: {leftovers}")
+
 
 if __name__ == "__main__":
     unittest.main()

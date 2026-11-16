@@ -67,7 +67,11 @@ def run(url: str, output_dir: Path, overwrite: bool = False, model_size: str = "
     final_dir = None
 
     try:
-        with tempfile.TemporaryDirectory(prefix="xhs-", dir=str(output_dir)) as temp_dir:
+        # 暂存区必须落本地：产物根可能在同步盘（OneDrive）上，中间文件进去会被
+        # 完整同步一遍再删除，白吃上行带宽，还会在产物根留下 xhs-* 残留目录。
+        scratch = scratch_dir()
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="xhs-", dir=str(scratch)) as temp_dir:
             work_dir = Path(temp_dir) / "note"
             try:
                 metadata, video_url, image_urls = discover_note(url, _profile_dir())
