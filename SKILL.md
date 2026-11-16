@@ -135,7 +135,7 @@ python scripts\xhs_board_batch.py --notes .scratch\board_notes.json
 - `scripts/douyin_media.py` / `scripts/douyin_cli.py`：抖音匿名优先下载、音频提取和 ASR 转录。
 - `scripts/xiaohongshu_media.py` / `scripts/xiaohongshu_cli.py`：小红书视频和图文媒体发现、下载与元数据清单。
 - `scripts/xiaohongshu_cdp.py`：以普通方式启动 Chrome 并暴露 CDP，供 Playwright 附着读取。
-- `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
+- `scripts/open_xiaohongshu_login.py`：小红书人工登录窗口。**已弃用，不要运行** —— 小红书笔记不需要登录态（带 `xsec_token` 即可），且该脚本用 Playwright 自带 Chromium 打开 profile，会降级写入 `Last Version` 并污染会话；它的默认 profile 也仍指向已被污染的旧 `.chrome-xiaohongshu`。
 
 修改抓取、状态或风控逻辑后运行：
 

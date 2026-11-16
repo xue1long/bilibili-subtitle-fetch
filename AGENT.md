@@ -10,7 +10,7 @@
 - `scripts/rescue_one_subtitle.py`：单条视频的 DASH 音频 + faster-whisper 救援。
 - `scripts/douyin_cli.py`：抖音单条下载，视频走音频提取 + faster-whisper 转录，图文走图片下载 + 元数据清单。
 - `scripts/xiaohongshu_cli.py`：小红书单条视频/图文下载和元数据清单。
-- `scripts/open_xiaohongshu_login.py`：初始化小红书持久化登录 profile。
+- `scripts/open_xiaohongshu_login.py`：小红书人工登录窗口。**已弃用，不要运行** —— 小红书笔记不需要登录态，且该脚本用 Playwright 自带 Chromium 打开 profile，会降级写入 `Last Version` 并污染会话；它的默认 profile 也仍指向已被污染的旧 `.chrome-xiaohongshu`。
 - `scripts/sources/`：视频来源适配器。
 - `scripts/pipeline/`：任务模型和去重规划。
 - `scripts/backends/`：Playwright 字幕与 ASR 后端。

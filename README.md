@@ -393,14 +393,17 @@ bilibili-subtitle-fetch/
     └── storage/                   # manifest / SQLite / 旧 JSON 迁移
 ```
 
-运行时生成的 `data/`、`10_raw/`、`.batch/`、`.chrome-bilibili/` 和临时音频不应提交。
+运行时生成的 `data/`、`10_raw/`、`.batch/`、`.scratch/`（媒体暂存区）、`.chrome-bilibili/`、`.chrome-douyin/`、`.chrome-xiaohongshu-clean/` 和临时音频不应提交。完整忽略规则见 `.gitignore`。
 
 ---
 
 ## 版本历史
 
-- **v1.3** (2026-06-10) — Vendor `extract_meta.py`，零外部依赖
+按时间倒序：
+
+- **v1.9** (2026-11-16) — 文档与代码同步校正：Python 下限 3.10+、错误码统一为 `BROWSER_START_FAILED`、产物根与环境变量表补全；小红书合集图文批量下载流程固化（`scripts/xhs_board_batch.py`）
 - **v1.8** (2026-09-21) — 统一来源、任务规划和 SQLite 状态库；保留旧入口兼容
+- **v1.3** (2026-06-10) — Vendor `extract_meta.py`，零外部依赖
 - **v1.2** (2026-06-10) — 新增"下载字幕后自动拼元数据 frontmatter"功能
 - **v1.1** — 移除对 karpathy `videos.db` 的依赖，保留对 `compile_db.json` 的兼容写回
 - **v1.0** — 初始发布：单视频 / UP 主空间 / 收藏夹三种模式

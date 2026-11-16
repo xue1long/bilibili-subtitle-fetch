@@ -54,7 +54,11 @@ $pct = [char]37
    （若个别文件没带上 P 属性，单独再打一次；`.NET` 的 `Attributes` 枚举读不到 P 位，
    请用 `attrib <路径>` 查看原始标记。）
 5. 各平台 Chrome profile **各自登录**（cookie 不跨机，这是有意的）：
-   `python scripts/open_playwright_login.py`、`python scripts/open_xiaohongshu_login.py`
+   `python scripts/open_playwright_login.py`
+
+> 小红书**不需要登录**：带有效 `xsec_token` 的链接用全新的空 profile 即可读出笔记
+> （见 `SKILL.md` 小红书节）。不要跑 `open_xiaohongshu_login.py`——它用 Playwright
+> 自带 Chromium 打开 profile，会降级写入 `Last Version` 并污染会话。
 
 ## 去重怎么生效
 
