@@ -27,6 +27,16 @@ class XiaohongshuMediaTest(unittest.TestCase):
         )
         self.assertEqual(parse_note_id("https://www.xiaohongshu.com/board/6aa540d0000000002902d565"), "6aa540d0000000002902d565")
 
+    def test_parse_note_id_from_board_collection_two_segment_url(self):
+        collection = "6ae99c14000000000401d343"
+        note = "6ab3c8c40000000014033363"
+        url = f"https://www.xiaohongshu.com/board/{collection}/{note}?xsec_token=secret&xsec_source=pc_user"
+        self.assertEqual(parse_note_id(url), note)
+        metadata = normalize_metadata({}, url)
+        self.assertEqual(metadata["note_id"], note)
+        self.assertEqual(metadata["url"], f"https://www.xiaohongshu.com/explore/{note}")
+        self.assertNotIn("secret", metadata["url"])
+
     def test_normalize_metadata_removes_query_token(self):
         result = normalize_metadata(
             {

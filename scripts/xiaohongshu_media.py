@@ -32,10 +32,16 @@ class XiaohongshuError(RuntimeError):
 def parse_note_id(url: str) -> str:
     parts = [part for part in urlparse(url).path.split("/") if part]
     for marker in ("explore", "board"):
-        if marker in parts:
-            index = parts.index(marker)
-            if index + 1 < len(parts) and parts[index + 1]:
-                return parts[index + 1]
+        if marker not in parts:
+            continue
+        segments = parts[parts.index(marker) + 1:]
+        if not segments:
+            continue
+        # 合集页分享链接是 /board/<合集ID>/<笔记ID>，笔记 ID 在第二段；
+        # 旧分享格式 /board/<笔记ID> 只有一段，保持兼容。
+        if marker == "board" and len(segments) >= 2:
+            return segments[1]
+        return segments[0]
     raise XiaohongshuError("NOTE_NOT_FOUND", "无法从小红书 URL 解析笔记 ID")
 
 
@@ -168,11 +174,14 @@ def _note_state_script():
             note = (map[key] && map[key].note) || null;
         }
         if (note) {
-            result.authoritative = true;
+            const imageList = note.imageList || [];
+            // 登录弹窗/错误页里 noteDetailMap 也会塞空占位对象；
+            // 只有真正带标题或图集才算权威数据，否则会让轮询提前 break。
+            result.authoritative = !!(note.title || imageList.length);
             result.title = note.title || '';
             result.description = note.desc || '';
             result.author = (note.user && note.user.nickname) || '';
-            result.images = (note.imageList || []).map(image => ({
+            result.images = imageList.map(image => ({
                 url: image.urlDefault || image.urlPre || '',
                 width: image.width || 0,
                 height: image.height || 0,
@@ -233,18 +242,25 @@ async def _discover_page_cdp(source_url: str, endpoint: str) -> dict:
             context = browser.contexts[0] if browser.contexts else await browser.new_context()
             page = context.pages[0] if context.pages else await context.new_page()
             await page.goto(source_url, wait_until="domcontentloaded", timeout=60000)
-            await page.wait_for_timeout(1200)
-            # 小红书可能先弹登录窗口，但后台仍在加载笔记；等权威数据出现再判定。
+            # 小红书可能先弹登录窗口，但后台仍在加载笔记；看到 /login 不要立刻放弃。
             # 页面状态里的 imageList 才是完整图集，DOM 兜底会漏掉懒加载的轮播图。
+            # 不固定 sleep：goto 返回后立刻探测，靠轮询等 __INITIAL_STATE__ 就绪。
             state = {}
-            for _ in range(15):
-                state = await page.evaluate(_note_state_script())
+            for _ in range(20):
+                try:
+                    state = await page.evaluate(_note_state_script())
+                except Exception:
+                    # SPA 二次导航会销毁执行上下文，重试而不是让整轮 CDP 失败
+                    await page.wait_for_timeout(400)
+                    continue
                 if state.get("authoritative"):
                     break
-                if state.get("title") and urlparse(page.url).path.rstrip("/") != "/login":
+                if state.get("title") and select_note_images(state.get("images") or []):
                     break
-                await page.wait_for_timeout(1000)
-            if not state.get("title") and urlparse(page.url).path.rstrip("/") == "/login":
+                await page.wait_for_timeout(600)
+            if not state.get("title") and urlparse(page.url).path.rstrip("/") in (
+                "/login", "/website-login/error", "/404"
+            ):
                 return {"login_required": True}
         finally:
             await browser.close()
@@ -267,6 +283,7 @@ def _discover_via_cdp(source_url: str, profile_dir: Path) -> dict:
     """
     if not chrome_executable():
         return {}
+    login_required = False
     for headless in (True, False):
         port = free_port()
         process = launch_chrome(profile_dir, port, headless=headless)
@@ -282,7 +299,11 @@ def _discover_via_cdp(source_url: str, profile_dir: Path) -> dict:
             stop_chrome(process)
         if state.get("title"):
             return state
-    return {}
+        # 明确判定登录/风控时不再跑有头兜底：实测有头轮比无头慢约 6 倍且同样无数据
+        if state.get("login_required"):
+            login_required = True
+            break
+    return {"login_required": True} if login_required else {}
 
 
 def discover_note(url: str, profile_dir: Path | None = None) -> tuple[dict, str | None, list[str]]:

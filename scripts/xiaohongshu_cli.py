@@ -27,7 +27,14 @@ class XiaohongshuCliError(RuntimeError):
 
 
 def _profile_dir() -> Path:
-    return Path(os.environ.get("XHS_SFETCH_CHROME_PROFILE", project_root() / ".chrome-xiaohongshu"))
+    # 旧的 .chrome-xiaohongshu 被高频请求污染（跳 /website-login/error）；
+    # 干净的独立 profile 不需要登录态，带 xsec_token 的链接即可稳定读出笔记。
+    return Path(
+        os.environ.get(
+            "XHS_SFETCH_CHROME_PROFILE",
+            project_root() / ".chrome-xiaohongshu-clean",
+        )
+    )
 
 
 def _note_body(note_type: str | None, asset_files: list[str]) -> str:

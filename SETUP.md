@@ -144,12 +144,12 @@ $env:DOUYIN_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-d
 python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
 
-默认先用无 Cookie 页面提取媒体；页面需要登录态时，再使用项目根目录 `.chrome-xiaohongshu`。自定义 profile：
+默认走「普通 Chrome + CDP」通道，使用项目根目录 `.chrome-xiaohongshu-clean`（干净 profile，不需要登录态）。自定义 profile：
 
 ```powershell
-$env:XHS_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-xiaohongshu"
+$env:XHS_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-fetch\.chrome-xiaohongshu-clean"
 ```
 
-如果返回 `LOGIN_REQUIRED`，先运行 `python scripts\open_xiaohongshu_login.py`，在打开的窗口中完成一次人工登录，再重试下载。
+如果返回 `LOGIN_REQUIRED`，**不要**运行 `open_xiaohongshu_login.py` 人工登录（它会用 Playwright 自带 Chromium 打开系统 Chrome 创建的 profile 并污染会话）。笔记不需要登录态，正解是把上述环境变量指向一个全新的空目录后重跑；批量任务连续报错时先停任务。
 
-结果保存在 `10_raw\03_小红书\<笔记ID>\`。视频为 `video.mp4`，图文为按原比例缩小 50% 的 `images\*.webp`，`<笔记ID>.md` 是包含标题、作者、简介、资源数量和相对路径清单的元数据文件。签名 URL 不写入元数据；已有同名目录需追加 `--overwrite`。
+结果保存在 `<产物根>\03_小红书\<笔记ID>\`（产物根默认 `10_raw\`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）。视频为 `video.mp4`，图文为按原比例缩小 50% 的 `images\*.webp`，`<笔记ID>.md` 是包含标题、作者、简介、资源数量和相对路径清单的元数据文件。签名 URL 不写入元数据；已有同名目录需追加 `--overwrite`。

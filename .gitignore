@@ -61,6 +61,7 @@ config.json
 .chrome-bilibili/
 .chrome-douyin/
 .chrome-xiaohongshu/
+.chrome-xiaohongshu-clean/
 .edge-bilibili/
 .playwright-verify/
 

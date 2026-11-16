@@ -45,6 +45,7 @@ python scripts\cli.py --space-url "https://space.bilibili.com/.../upload/video"
 python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=...&showTab=favorite_collection"
 python scripts\douyin_cli.py --url "https://www.douyin.com/video/<视频ID>" --image-output "10_raw\05_抖音笔记图片"
 python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
+python scripts\xhs_board_batch.py --notes .scratch\board_notes.json
 ```
 
 启用 ASR 兜底或重试任务：
@@ -75,7 +76,7 @@ python scripts\cli.py --favorite-url "..." --retry-failed
 - `scripts/compile_db.json` 仅在文件存在且含对应 record 时写入字幕路径，不是任务状态库。
 - ASR 需要 `faster-whisper` 和系统 `ffmpeg`；空间模式需要 `yt-dlp`。
 - 抖音流程先匿名解析 `aweme/detail` 接口拿目标帖；失败才使用旧页面扫描、`yt-dlp` 和可选的 `.chrome-douyin` profile，环境变量 `DOUYIN_SFETCH_CHROME_PROFILE` 可覆盖。
-- 小红书流程用「普通 Chrome + CDP」发现资源（`scripts/xiaohongshu_cdp.py`）：Playwright 自带 Chromium 带 `--enable-automation`，会被小红书风控跳登录；普通方式启动的 Chrome 不带自动化标记，headless 优先、不弹窗口。默认 profile 是 `.chrome-xiaohongshu`，环境变量 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 可覆盖。签名 CDN URL 只在内存中使用。
+- 小红书流程用「普通 Chrome + CDP」发现资源（`scripts/xiaohongshu_cdp.py`）：Playwright 自带 Chromium 带 `--enable-automation`，会被小红书风控跳登录；普通方式启动的 Chrome 不带自动化标记，headless 优先、不弹窗口。默认 profile 是 `.chrome-xiaohongshu-clean`（旧的 `.chrome-xiaohongshu` 已被污染，不要再用），环境变量 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 可覆盖；`LOGIN_REQUIRED` 的正解是换干净 profile，不是人工登录。签名 CDN URL 只在内存中使用。
 - 小红书入口使用分享页完整 URL；无 Cookie 页面跳转 `/login` 时返回 `LOGIN_REQUIRED`，不能把登录页误判为资源不存在。
 - 不提交 `.chrome-bilibili/`、`.venv/`、字幕、音频、模型缓存或账号状态。
 - 不记录或提交 Cookie、Authorization header、响应 body、页面文本和原始响应 URL；不绕过 CAPTCHA、付费限制或风控。

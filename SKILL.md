@@ -78,7 +78,7 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/video/768755985877935
 
 ## 小红书视频和图文
 
-`xiaohongshu_cli.py` 支持 `/explore/<笔记ID>` 和 `/board/<笔记ID>` 单条笔记；请传入包含 `xsec_token`、`xsec_source`、`source` 的完整分享 URL —— **链接必须带 token 才能打开笔记**。
+`xiaohongshu_cli.py` 支持 `/explore/<笔记ID>`、旧分享格式 `/board/<笔记ID>`，以及合集页 `/board/<合集ID>/<笔记ID>`（两段 ID，取第二段作为笔记 ID）；请传入包含 `xsec_token`、`xsec_source`、`source` 的完整分享 URL —— **链接必须带 token 才能打开笔记**。批量下载见下节。
 
 发现资源走「普通 Chrome + CDP」通道：用 `scripts/xiaohongshu_cdp.py` 以**普通方式**启动 Chrome（只加 `--remote-debugging-port`，不带任何自动化参数），再让 Playwright 通过 CDP 附着上去。原因：Playwright 自己启动的 Chromium 必带 `--enable-automation`，`navigator.webdriver` 为 true，小红书风控会把笔记页跳到登录窗口；而 Chrome 136+ 又禁止在默认 user-data-dir 上开远程调试端口，所以要用独立 profile 目录承载。Chrome 以 **headless 优先**启动（不弹窗口、也不会被跳登录页），拿不到再回落有头模式。
 
@@ -99,11 +99,21 @@ python scripts/douyin_cli.py --url "https://www.douyin.com/video/768755985877935
 python scripts/xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
 
-默认目录是 `10_raw/03_小红书/<笔记ID>/`；可用 `--output` 覆盖，已有目录需显式追加 `--overwrite`。默认 profile 是 `.chrome-xiaohongshu`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖；CDP 通道用的 profile 可用 `XHS_SFETCH_CDP_PROFILE` 单独指定。签名 URL 不落盘，不处理 CAPTCHA、付费限制或 DRM。
+默认目录是 `<产物根>/03_小红书/<笔记ID>/`（产物根默认仓库内 `10_raw/`，设 `BILIBILI_SFETCH_RAW_DIR` 可指向同步盘）；可用 `--output` 覆盖，已有目录需显式追加 `--overwrite`。默认 profile 是 `.chrome-xiaohongshu-clean`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖；CDP 通道用的 profile 可用 `XHS_SFETCH_CDP_PROFILE` 单独指定（优先级更高）。签名 URL 不落盘，不处理 CAPTCHA、付费限制或 DRM。
 
-若返回 `LOGIN_REQUIRED`，先运行 `python scripts/open_xiaohongshu_login.py`，完成一次人工登录后再重试。
+若返回 `LOGIN_REQUIRED`，**不要跑 `open_xiaohongshu_login.py` 人工登录**：实测笔记不需要登录态，该脚本用 Playwright 自带 Chromium 打开系统 Chrome 创建的 profile，会降级写入 `Last Version` 并污染会话。正解是换一个全新的空 profile —— 把 `XHS_SFETCH_CHROME_PROFILE`（或 `XHS_SFETCH_CDP_PROFILE`）指向新目录后重跑；连续出现该错误时先停任务，避免高频请求放大风控。
 
-不要试图复用用户日常 Chrome 的登录态：Chrome 运行时会把 `Default/Network/Cookies` 独占锁住，`shutil.copy2` 报 PermissionError、SQLite 读不了、`esentutl` 报 `JET_errFileAccessDenied(-1032)`。CDP 通道用项目自己的 `.chrome-xiaohongshu` profile 即可。
+不要试图复用用户日常 Chrome 的登录态：Chrome 运行时会把 `Default/Network/Cookies` 独占锁住，`shutil.copy2` 报 PermissionError、SQLite 读不了、`esentutl` 报 `JET_errFileAccessDenied(-1032)`。CDP 通道用项目自己的 `.chrome-xiaohongshu-clean` profile 即可。
+
+## 批量下载合集图文笔记
+
+先用浏览器从合集页读出链接，整理成 JSON 清单（数组，每项含 `id` 笔记 ID、`token` 即 `xsec_token`，可选 `title`），再：
+
+```powershell
+python scripts\xhs_board_batch.py --notes .scratch\board_notes.json
+```
+
+脚本只下载图文：视频笔记在写任何文件之前拦下，不跑 ASR；以 `<产物根>/03_小红书/<笔记ID>/<笔记ID>.md` 是否存在断点续跑，已完成的条目自动跳过；逐条结果默认写 `<清单名>_report.json`。可用 `--output`、`--report`、`--delay`、`--source` 覆盖默认值。清单只存 ID 与 token，链接统一归一化成 `/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user`。
 
 ## 处理规则
 

@@ -161,7 +161,9 @@ python scripts\transcribe_video.py "D:\videos\clip.mp4" --model small --output "
 python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 ```
 
-请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）。默认输出到 `10_raw/03_小红书/<笔记ID>/`：视频笔记包含 `video.mp4`，图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片；同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令先使用无 Cookie 页面，页面无法发现资源时才尝试 `.chrome-xiaohongshu`；需要登录时先运行 `python scripts\open_xiaohongshu_login.py`，可用 `XHS_SFETCH_CHROME_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。
+请直接复制小红书分享的完整 URL（包含 `xsec_token`、`xsec_source`、`source`）；合集页 `/board/<合集ID>/<笔记ID>` 的两段 ID 也支持。默认输出到 `<产物根>/03_小红书/<笔记ID>/`（产物根默认 `10_raw/`，可由 `BILIBILI_SFETCH_RAW_DIR` 指向同步盘）：视频笔记包含 `video.mp4`，图文笔记包含按原比例缩小 50% 的 `images/01.webp` 等图片；同目录的 `<笔记ID>.md` 写入标题、作者、简介、规范化 URL、笔记类型、资源数量和相对文件清单。命令优先走「普通 Chrome + CDP」通道，默认使用干净的 `.chrome-xiaohongshu-clean` profile（不需要登录态）；遇到 `LOGIN_REQUIRED` 时换一个全新空 profile，不要人工登录。可用 `XHS_SFETCH_CHROME_PROFILE` / `XHS_SFETCH_CDP_PROFILE` 覆盖 profile。签名 CDN URL 只在进程内使用，不写入文件。
+
+批量下载合集图文笔记：`python scripts\xhs_board_batch.py --notes <清单.json>`，清单格式与断点续跑见 [SKILL.md](SKILL.md)。
 
 ### 搜索并批量下载
 

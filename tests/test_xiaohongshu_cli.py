@@ -115,6 +115,38 @@ class XiaohongshuCliTest(unittest.TestCase):
                         xiaohongshu_cli.run(IMAGE_URL, Path(directory))
             self.assertFalse((Path(directory) / "broken" / "broken.md").exists())
 
+    def test_default_profile_is_clean(self):
+        with patch.dict("os.environ", {}, clear=True):
+            self.assertEqual(xiaohongshu_cli._profile_dir().name, ".chrome-xiaohongshu-clean")
+
+    def test_env_profile_override_wins(self):
+        with patch.dict("os.environ", {"XHS_SFETCH_CHROME_PROFILE": "D:/custom-profile"}):
+            self.assertEqual(xiaohongshu_cli._profile_dir(), Path("D:/custom-profile"))
+
+    def test_run_board_collection_url_uses_note_id_dir(self):
+        note_id = "6ab3c8c40000000014033363"
+        board_url = (
+            f"https://www.xiaohongshu.com/board/6ae99c14000000000401d343/{note_id}"
+            "?xsec_token=secret&xsec_source=pc_user"
+        )
+
+        def fake_discover(url, profile_dir):
+            return ({"note_type": "image"}, None, ["https://cdn/01.webp"])
+
+        def fake_download(note, image_urls, output_dir):
+            image_dir = output_dir / "images"
+            image_dir.mkdir(parents=True, exist_ok=True)
+            (image_dir / "01.webp").write_bytes(b"image")
+            return {"asset_count": 1, "asset_files": ["images/01.webp"]}
+
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.object(xiaohongshu_cli, "discover_note", side_effect=fake_discover):
+                with patch.object(xiaohongshu_cli, "download_assets", side_effect=fake_download):
+                    output = xiaohongshu_cli.run(board_url, Path(directory))
+            self.assertEqual(output.parent.name, note_id)
+            self.assertEqual(output.name, f"{note_id}.md")
+            self.assertTrue(output.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
