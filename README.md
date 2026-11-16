@@ -35,7 +35,7 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 小红书支持单条视频和图文笔记下载：自动保存媒体、笔记元数据和资源清单。
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
 ---
 
@@ -71,7 +71,7 @@ python scripts\cli.py --favorite-url "..." --only-status paused --retry-paused
 
 ### 前置条件
 
-- Python 3.7+
+- Python 3.10+（代码使用 `X | None` 联合类型注解，3.9 及以下 import 即报错）
 - Google Chrome 浏览器（已登录 B 站账号）
 - `playwright`（字幕抓取默认后端；Selenium 仅作兼容回退）：
 

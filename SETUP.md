@@ -9,7 +9,7 @@
 
 | 依赖 | 要求 | 说明 |
 |------|------|------|
-| Python | 3.7+（实测 3.13 可用） | 建议用虚拟环境隔离 |
+| Python | 3.10+（实测 3.13 可用） | 代码用 `X \| None` 联合类型注解，3.9 及以下会 import 报错；建议用虚拟环境隔离 |
 | Google Chrome | 已登录 B 站账号（抖音可选） | B 站字幕需要登录态；抖音先匿名尝试 |
 | ffmpeg | 系统 PATH 内 | **仅音频救援模式**需要 |
 | 网络 | 可访问 bilibili.com | — |
@@ -74,7 +74,7 @@ python scripts/open_playwright_login.py
 `BILIBILI_SFETCH_CHROME_PROFILE` 覆盖。若使用自定义 profile，必须让登录和提取指向同一路径，否则会出现「登了也报 `LOGIN_REQUIRED`」：
 
 ```powershell
-$env:BILIBILI_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-bilibili"
+$env:BILIBILI_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-fetch\.chrome-bilibili"
 # 随后跑提取（见第 7 节）
 ```
 
@@ -93,7 +93,7 @@ python scripts/subtitle_extractor.py BV1vqeF62EQS --browser chrome --output "10_
 ## 7. 快速验证
 
 ```powershell
-$env:BILIBILI_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-bilibili"
+$env:BILIBILI_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-fetch\.chrome-bilibili"
 python scripts/subtitle_extractor.py BV1vqeF62EQS --browser chrome --output "10_raw\01_B站视频转录"
 ```
 
@@ -131,7 +131,7 @@ python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=76
 默认输出 `10_raw\02_抖音视频转录\DY7687559858779351972.md`，包含视频元数据和 SRT 字幕。匿名解析失败后才尝试 `yt-dlp`，最后使用项目 `.chrome-douyin`；自定义登录 profile：
 
 ```powershell
-$env:DOUYIN_SFETCH_CHROME_PROFILE = "E:\002-Pr\bilibili-subtitle-fetch\.chrome-douyin"
+$env:DOUYIN_SFETCH_CHROME_PROFILE = "E:\002-Pr\012-notebook\bilibili-subtitle-fetch\.chrome-douyin"
 ```
 
 抖音 ASR 同样需要 `faster-whisper` 和系统 `ffmpeg`；追加 `--keep-video` 可保留下载的视频文件。

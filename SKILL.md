@@ -39,7 +39,7 @@ python scripts/run_subtitle_batch.py
 
 ## 前置条件
 
-- Python 3.7+，安装 `requirements.txt` 并运行 `playwright install chromium`。
+- Python 3.10+，安装 `requirements.txt` 并运行 `playwright install chromium`。代码使用 `X | None` 联合类型注解，3.9 及以下 import 即报错。
 - 已登录 B 站的项目 profile：默认是项目根目录 `.chrome-bilibili`，可用 `BILIBILI_SFETCH_CHROME_PROFILE` 覆盖。
 - 空间来源需要 `yt-dlp`；ASR 需要 `faster-whisper` 和系统 `ffmpeg`。
 - 同一个持久化 profile 不能被多个浏览器进程同时占用；登录脚本为 `python scripts/open_playwright_login.py`。
