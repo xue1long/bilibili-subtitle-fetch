@@ -5,6 +5,7 @@ import random
 import re
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -361,3 +362,179 @@ def classify_failure(error=None, response_status=None, session=None,
     if status is None:
         return FailureKind.SUBTITLE_API_FAILED
     return FailureKind.SUBTITLE_API_FAILED
+
+
+# ----------------------------------------------------------------------
+# Cover URL fetching (HTTP API, no browser)
+# ----------------------------------------------------------------------
+
+class CoverStatus:
+    OK = "OK"
+    RATE_LIMITED = "RATE_LIMITED"
+    FAIL = "FAIL"
+    PERMANENT = "PERMANENT"
+
+
+# Source-side codes that cannot be fixed by retrying: the video is deleted,
+# private, restricted, or simply does not exist.
+PERMANENT_VIEW_CODES = (62002, 62012, -404)
+RATE_LIMIT_STATUSES = (403, 412, 429)
+
+
+class FetchPolicy:
+    """Batch concurrency and backoff policy for the Bilibili view API.
+
+    A first pass at concurrency 4 / 120 ms succeeds for roughly 850 requests,
+    after which the IP starts getting 412/429. The retry pass drops to
+    concurrency 2 and grows the gap by ``retry_step`` each round.
+    """
+
+    def __init__(self, concurrency=4, batch_gap=0.12,
+                 retry_concurrency=2, retry_base_gap=0.8, retry_step=0.6,
+                 max_rounds=4, sleeper=None):
+        if min(concurrency, retry_concurrency, max_rounds) < 1:
+            raise ValueError("invalid fetch policy")
+        if min(batch_gap, retry_base_gap, retry_step) < 0:
+            raise ValueError("invalid fetch policy delays")
+        self.concurrency = int(concurrency)
+        self.batch_gap = float(batch_gap)
+        self.retry_concurrency = int(retry_concurrency)
+        self.retry_base_gap = float(retry_base_gap)
+        self.retry_step = float(retry_step)
+        self.max_rounds = int(max_rounds)
+        self._sleeper = sleeper or time.sleep
+
+    def retry_gap(self, round_number):
+        return self.retry_base_gap + round_number * self.retry_step
+
+    def sleep(self, seconds):
+        if seconds > 0:
+            self._sleeper(seconds)
+
+
+def normalize_cover_url(pic):
+    """Bilibili returns protocol-relative and sometimes plain http URLs."""
+    if not pic:
+        return ""
+    if pic.startswith("//"):
+        return "https:" + pic
+    if pic.startswith("http://"):
+        return "https://" + pic[len("http://"):]
+    return pic
+
+
+def classify_view_response(status, payload=None, error=None):
+    """Classify one view-API response as ``(kind, evidence)``.
+
+    ``evidence`` is the normalized cover record without local identifiers;
+    the caller merges those from the input row.
+    """
+    if status in RATE_LIMIT_STATUSES:
+        return CoverStatus.RATE_LIMITED, None
+    if error is not None or status is None or not 200 <= status < 300:
+        return CoverStatus.FAIL, None
+    if not isinstance(payload, dict):
+        return CoverStatus.FAIL, None
+    code = payload.get("code")
+    if code in PERMANENT_VIEW_CODES:
+        return CoverStatus.PERMANENT, None
+    if code != 0:
+        return CoverStatus.FAIL, None
+    data = payload.get("data") or {}
+    cover = normalize_cover_url(data.get("pic"))
+    if not cover:
+        return CoverStatus.PERMANENT if data else CoverStatus.FAIL, None
+    return CoverStatus.OK, {
+        "cover": cover,
+        "title": data.get("title") or "",
+        "upzhu": (data.get("owner") or {}).get("name") or "",
+        "duration": data.get("duration"),
+        "view": (data.get("stat") or {}).get("view"),
+    }
+
+
+def _run_fetch_batch(records, fetch, concurrency):
+    """Run ``fetch(record) -> (status, payload, error)`` concurrently."""
+    with ThreadPoolExecutor(max_workers=concurrency) as pool:
+        futures = {pool.submit(fetch, record): record for record in records}
+        results = []
+        for future in as_completed(futures):
+            record = futures[future]
+            try:
+                status, payload, error = future.result()
+            except Exception as exc:  # a bad row must not kill the batch
+                status, payload, error = None, None, exc
+            kind, evidence = classify_view_response(status, payload, error)
+            results.append((record, kind, evidence))
+    return results
+
+
+def _cover_record(record, evidence):
+    merged = dict(record)
+    merged.update(evidence)
+    return merged
+
+
+def _dedupe(records):
+    seen = set()
+    out = []
+    for record in records:
+        key = record.get("bvid")
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(record)
+    return out
+
+
+def fetch_covers(records, fetch, *, policy=None):
+    """Fetch cover URLs with a first pass plus backoff retries.
+
+    Only rate-limited rows are retried; permanent source errors and plain
+    failures are reported separately so callers can decide what to do.
+    """
+    policy = policy or FetchPolicy()
+    found = {}
+    permanent = {}
+    stats = {"ok": 0, "fail": 0, "rate_limited": 0, "permanent": 0}
+
+    def consume(results, retry_queue):
+        for record, kind, evidence in results:
+            key = record.get("bvid")
+            if kind == CoverStatus.OK:
+                found[key] = _cover_record(record, evidence)
+                stats["ok"] += 1
+            elif kind == CoverStatus.RATE_LIMITED:
+                retry_queue.append(record)
+                stats["rate_limited"] += 1
+            elif kind == CoverStatus.PERMANENT:
+                permanent[key] = record
+                stats["permanent"] += 1
+            else:
+                stats["fail"] += 1
+
+    first_pass_retries = []
+    for start in range(0, len(records), policy.concurrency):
+        batch = records[start:start + policy.concurrency]
+        consume(_run_fetch_batch(batch, fetch, policy.concurrency),
+                first_pass_retries)
+        policy.sleep(policy.batch_gap)
+
+    queue = _dedupe(first_pass_retries)
+    for round_number in range(1, policy.max_rounds + 1):
+        if not queue:
+            break
+        next_queue = []
+        for start in range(0, len(queue), policy.retry_concurrency):
+            batch = queue[start:start + policy.retry_concurrency]
+            consume(_run_fetch_batch(batch, fetch, policy.retry_concurrency),
+                    next_queue)
+            policy.sleep(policy.retry_gap(round_number))
+        queue = _dedupe(next_queue)
+
+    return {
+        "records": list(found.values()),
+        "permanent": list(permanent.values()),
+        "pending": queue,
+        "stats": stats,
+    }

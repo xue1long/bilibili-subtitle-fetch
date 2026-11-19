@@ -26,8 +26,13 @@
 - `scripts/backfill_platform_records.py`：扫描产物根下的 `02_抖音视频转录`（旧名 `02_抖音视频笔记`）与 `03_小红书`（旧名 `03_小红书收藏夹`），把已存在的 `.md`/`.mp4` 回填到 `data/platform_videos_manifest.json` 与 `data/subtitle_tasks.db`。
 - `scripts/platform_meta.py`：读取各平台本地元数据源（B站 frontmatter/manifest/download_list、抖珍藏本地库），归一化成统一的 `{video_id: {...}}` 结构。
 - `scripts/platform_meta_browser.py`：抖音/B站元数据的浏览器兜底抓取，结果落 JSONL 缓存，失败项可重跑。
-- `scripts/feishu_base.py`：`lark-cli` 封装——建表、建字段、分页读记录、批量增改记录、协作者授权。
-- `scripts/sync_metadata.py`：元数据流水线入口——本地源/浏览器结果 → 状态库与 manifest → 飞书多维表格。
+- `scripts/feishu_base.py`：`lark-cli` 封装——建表、建字段、分页读记录、批量增改记录、协作者授权。`list_records_v3` / `verify_field` 走 v3 列式端点并发回读校验；`list_field_options` / `ensure_field_options` 全量翻页读选项并合并后再 PUT，避免覆盖已有选项。
+- `scripts/feishu_auth.py`：agent 设备码授权——`start` 拿 verification_url + device_code，`complete` 完成登录；权限域收敛到 `base,drive`。
+- `scripts/summary_pipeline.py`：封面摘要流水线——封面下载/转 PNG、按 `idx` 值安全合并摘要库、飞书写入与回读校验。**不要用 `manifest[idx-1]` 取元数据**。
+- `scripts/xhs_board_inject.js` + `scripts/xhs_board_collect.py`：小红书 board 页直采（边滚边收 11 字段、按 note-id 去重、本地落盘、飞书 upsert），不打开笔记详情。详见 `docs/metadata-pipeline.md`。
+- `scripts/sync_metadata.py`：元数据流水线入口——本地源/浏览器结果 → 状态库与 manifest → 飞书多维表格。写库前自动备份 SQLite 到 `tmp/*.bak.HHMMSS`（`--no-backup` 关闭）。
+- `scripts/fetch_bili_covers.py`：B 站封面 URL 批量抓取入口；限流退避策略在 `scripts/bili_guard.py` 的 `FetchPolicy` / `fetch_covers`。
+- `scripts/contact_sheet.py`：把封面图拼成带 `#idx` 标签的网格图，用于看图写摘要。默认按 `idx` 值选图（允许缺口），`--mode position` 才是数组位置。
 
 ## 技能索引
 
@@ -55,6 +60,14 @@ python scripts\douyin_cli.py --url "https://www.douyin.com/user/self?modal_id=..
 python scripts\douyin_cli.py --url "https://www.douyin.com/video/<视频ID>" --image-output "10_raw\05_抖音笔记图片"
 python scripts\xiaohongshu_cli.py --url "https://www.xiaohongshu.com/explore/<笔记ID>?xsec_token=...&xsec_source=pc_user&source=web_profile_page"
 python scripts\xhs_board_batch.py --notes .scratch\board_notes.json
+python scripts\xhs_board_collect.py serve --out .scratch\xhs_board_full.json
+python scripts\xhs_board_collect.py push --notes .scratch\xhs_board_full.json --base UGWbb... --table tblXXX
+python scripts\fetch_bili_covers.py .scratch\bili_all.json .scratch\bili_covers_full.json --limit 10
+python scripts\contact_sheet.py --manifest .scratch\bili_covers\manifest.json --outdir .scratch\bili_sheets --start 0 --count 25
+python scripts\summary_pipeline.py merge --store .scratch\bili_summaries.json --items .scratch\bili_for_summary.json --batch .scratch\bili_batch_001.json
+python scripts\summary_pipeline.py write --store .scratch\bili_summaries.json --base UGWbb... --table tblXXX
+python scripts\summary_pipeline.py verify --store .scratch\bili_summaries.json --base UGWbb... --table tblXXX --platform bilibili
+python scripts\feishu_auth.py start --qr tmp\feishu-login.png
 ```
 
 启用 ASR 兜底或重试任务：

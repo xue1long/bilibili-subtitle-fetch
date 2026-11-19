@@ -21,8 +21,10 @@ from __future__ import annotations
 
 import argparse
 import json
+import shutil
 import sys
 from contextlib import closing
+from datetime import datetime
 from pathlib import Path
 
 from platform_meta import collect, default_appdata, merge, write_json
@@ -96,11 +98,31 @@ def build_rows(platform: str, meta: dict[str, dict],
     return rows
 
 
+def backup_db(root: Path, *, now: datetime | None = None) -> Path | None:
+    """Copy the state DB to ``tmp/subtitle_tasks.db.bak.<HHMMSS>``.
+
+    Metadata writes are UPDATEs on a shared SQLite file, so an accidental
+    bad merge has no undo path without a copy. Returns None when the DB does
+    not exist yet (a fresh project has nothing to back up).
+    """
+    source = root / "data" / "subtitle_tasks.db"
+    if not source.exists():
+        return None
+    stamp = (now or datetime.now()).strftime("%H%M%S")
+    target = root / "tmp" / f"subtitle_tasks.db.bak.{stamp}"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source, target)
+    return target
+
+
 def apply_to_store(root: Path, meta_by_platform: dict[str, dict],
-                   overwrite: bool = False) -> dict:
+                   overwrite: bool = False, *, backup: bool = True) -> dict:
     """Write collected metadata into SQLite and the platform manifest."""
+    backup_path = backup_db(root) if backup else None
     store = SQLiteStore(root / "data" / "subtitle_tasks.db")
     counts = {"title": 0, "uploader": 0, "url": 0}
+    if backup_path:
+        counts["backup"] = str(backup_path)
     with closing(store.connect()) as db:
         for platform, meta in meta_by_platform.items():
             for video_id, record in meta.items():
@@ -153,6 +175,8 @@ def main(argv=None) -> int:
                         help="把收集到的元数据写入 SQLite 与 manifest")
     parser.add_argument("--overwrite", action="store_true",
                         help="覆盖已有值（默认只填空列）")
+    parser.add_argument("--no-backup", action="store_true",
+                        help="写库前不备份 SQLite（默认备份到 tmp/*.bak.HHMMSS）")
     parser.add_argument("--cache", type=Path, default=None,
                         help="把合并结果写到该 JSON 文件")
     parser.add_argument("--feishu-token", default="",
@@ -180,9 +204,11 @@ def main(argv=None) -> int:
         return 2
 
     if args.apply:
-        counts = apply_to_store(args.root, merged, overwrite=args.overwrite)
+        counts = apply_to_store(args.root, merged, overwrite=args.overwrite,
+                                backup=not args.no_backup)
         print(f"状态库更新: title {counts['title']}, "
-              f"uploader {counts['uploader']}, url {counts['url']}")
+              f"uploader {counts['uploader']}, url {counts['url']}"
+              + (f"（备份 {counts['backup']}）" if counts.get("backup") else ""))
 
     if args.feishu_token:
         if not args.feishu_table:

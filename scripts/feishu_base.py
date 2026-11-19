@@ -27,12 +27,20 @@ import os
 import shutil
 import subprocess
 import tempfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
 
 DEFAULT_LARK_CLI = "lark-cli"
 DEFAULT_BATCH = 200
 RECORD_PAGE_LIMIT = 2000
+
+# The v3 ``records`` endpoint ignores page_size and returns 20 rows per page.
+# An offset-only cursor means a 3400-row table needs 171 calls, so pages are
+# fetched in parallel rather than one at a time.
+V3_PAGE_SIZE = 20
+V3_CONCURRENCY = 8
+V3_MAX_PAGES = 400
 
 # Field type names accepted by the CLI.
 FIELD_TYPES = (
@@ -75,10 +83,15 @@ class FeishuBase:
     # ------------------------------------------------------------------
     # process plumbing
     # ------------------------------------------------------------------
-    def _run(self, args: list[str], *, check: bool = True) -> str:
+    def _run(self, args: list[str], *, check: bool = True,
+             env: dict | None = None) -> str:
         command = [self.cli] + args + ["--as", self.identity]
+        run_env = None
+        if env:
+            run_env = os.environ.copy()
+            run_env.update(env)
         result = subprocess.run(command, capture_output=True, text=True,
-                                encoding="utf-8", errors="replace")
+                                encoding="utf-8", errors="replace", env=run_env)
         if result.returncode != 0 and not result.stdout.strip():
             raise FeishuError(
                 f"lark-cli failed (rc={result.returncode}): "
@@ -92,8 +105,27 @@ class FeishuBase:
             raise FeishuError(f"{args[0]} failed: {json.dumps(payload)[:300]}")
         return result.stdout
 
-    def _run_json(self, args: list[str], *, check: bool = True) -> dict:
-        return json.loads(self._run(args, check=check))
+    def _run_json(self, args: list[str], *, check: bool = True,
+                  env: dict | None = None) -> dict:
+        return json.loads(self._run(args, check=check, env=env))
+
+    def api_write(self, method: str, path: str, payload: dict, *,
+                  env: dict | None = None) -> dict:
+        """Call a raw ``api PUT/POST`` endpoint with a file-backed body.
+
+        Raw endpoints need ``MSYS_NO_PATHCONV=1`` under Git Bash, and long
+        payloads must travel through ``@file`` instead of the command line.
+        """
+        run_env = {"MSYS_NO_PATHCONV": "1"}
+        if env:
+            run_env.update(env)
+        with tempfile.TemporaryDirectory(prefix="feishu-") as workdir:
+            body = Path(workdir) / "body.json"
+            body.write_text(json.dumps(payload, ensure_ascii=False),
+                            encoding="utf-8")
+            return self._run_json(["api", method.upper(), path,
+                                   "--data", f"@{body}"],
+                                  check=False, env=run_env)
 
     # ------------------------------------------------------------------
     # schema
@@ -134,6 +166,75 @@ class FeishuBase:
         payload = {"name": name, "type": field_type}
         payload.update(kwargs)
         return self.create_field(table_id, payload)
+
+    def list_field_options(self, table_id: str, field_name: str, *,
+                           page_size: int = 200, max_pages: int = 50,
+                           env: dict | None = None) -> list[dict]:
+        """Read every option of a select field via the v3 options endpoint.
+
+        ``+field-get`` caps at 50 options and ``+field-search-options`` at
+        200 with a misleading ``has_more=false``. The raw endpoint exposes
+        ``data.total`` and honours offset/limit paging, so it is the only
+        reliable way to enumerate options before an update.
+        """
+        path = (f"/open-apis/base/v3/bases/{self.base_token}"
+                f"/tables/{table_id}/fields/{field_name}/options")
+        options: list[dict] = []
+        offset = 0
+        total: int | None = None
+        for _ in range(max_pages):
+            payload = self.api_get(path, {"offset": offset, "limit": page_size},
+                                   env=env)
+            if not payload.get("ok"):
+                raise FeishuError(
+                    "field options read failed: "
+                    + json.dumps(payload.get("error"), ensure_ascii=False)[:300])
+            data = payload.get("data") or {}
+            page = data.get("items") or data.get("options") or []
+            options.extend(page)
+            if total is None:
+                try:
+                    total = int(data.get("total", 0))
+                except (TypeError, ValueError):
+                    total = 0
+            offset += len(page)
+            if not page or (total and offset >= total):
+                break
+        return options
+
+    def ensure_field_options(self, table_id: str, field_name: str,
+                             names: list[str], *,
+                             env: dict | None = None) -> dict:
+        """Add missing select options without dropping existing ones.
+
+        Field updates are full PUTs: sending only the new names deletes every
+        other option. This reads the full option list first, merges, and
+        submits ``{"name": ...}`` entries only (hue/lightness are rejected).
+        """
+        field = next((f for f in self.list_fields(table_id)
+                      if f.get("name") == field_name), None)
+        if field is None:
+            raise FeishuError(f"field not found: {field_name}")
+        field_id = field.get("id") or field_name
+        existing = [o.get("name") for o in
+                    self.list_field_options(table_id, field_name, env=env)
+                    if isinstance(o, dict) and o.get("name")]
+        merged: list[str] = list(existing)
+        for name in names:
+            if name not in merged:
+                merged.append(name)
+        payload = {key: field[key] for key in ("name", "type", "multiple", "style")
+                   if key in field}
+        payload["options"] = [{"name": name} for name in merged]
+        path = (f"/open-apis/base/v3/bases/{self.base_token}"
+                f"/tables/{table_id}/fields/{field_id}")
+        result = self.api_write("PUT", path, payload, env=env)
+        if not result.get("ok"):
+            raise FeishuError(
+                "field options update failed: "
+                + json.dumps(result.get("error"), ensure_ascii=False)[:300])
+        return {"field_id": field_id, "before": len(existing),
+                "after": len(merged), "added": len(merged) - len(existing)}
 
     # ------------------------------------------------------------------
     # records
@@ -194,6 +295,153 @@ class FeishuBase:
             if key and record_id:
                 mapping[str(key)] = record_id
         return mapping
+
+    # ------------------------------------------------------------------
+    # v3 records endpoint (column-shaped, 20 rows per page)
+    # ------------------------------------------------------------------
+    def api_get(self, path: str, params: dict, *,
+                env: dict | None = None) -> dict:
+        """Call a raw ``api GET`` endpoint with query parameters in ``--params``.
+
+        Git Bash rewrites ``/open-apis/...`` into a Windows drive path unless
+        ``MSYS_NO_PATHCONV=1`` is set, so callers should pass it in ``env``.
+        """
+        args = ["api", "GET", path, "--params",
+                json.dumps(params, ensure_ascii=False)]
+        return self._run_json(args, check=False, env=env)
+
+    @staticmethod
+    def decode_v3_page(data: dict) -> list[dict]:
+        """Turn a column-shaped v3 page into row dicts with record ids."""
+        names = data.get("fields") or []
+        values = data.get("data") or []
+        record_ids = data.get("record_id_list") or []
+        rows: list[dict] = []
+        for index, row in enumerate(values):
+            record = {"record_id": record_ids[index]
+                      if index < len(record_ids) else None}
+            for name, value in zip(names, row):
+                record[name] = value
+            rows.append(record)
+        return rows
+
+    @staticmethod
+    def one_value(value):
+        """Text and select cells may arrive as arrays; take the first value."""
+        if isinstance(value, list):
+            return value[0] if value else None
+        return value
+
+    def list_records_v3(self, table_id: str, *,
+                        page_size: int = V3_PAGE_SIZE,
+                        concurrency: int = V3_CONCURRENCY,
+                        max_pages: int = V3_MAX_PAGES,
+                        env: dict | None = None) -> list[dict]:
+        """Read all rows through the v3 records endpoint, fetching pages in parallel.
+
+        ``list_records`` uses ``+record-list`` (ndjson, 2000-row page). This
+        method uses the raw endpoint instead: it returns every field, but caps
+        each page at 20 rows and only supports offset paging. Parallel batches
+        keep a 3400-row table at a few seconds instead of minutes.
+        """
+        if page_size < 1 or concurrency < 1:
+            raise ValueError("page_size and concurrency must be positive")
+        run_env = {"MSYS_NO_PATHCONV": "1"}
+        if env:
+            run_env.update(env)
+        path = (f"/open-apis/base/v3/bases/{self.base_token}"
+                f"/tables/{table_id}/records")
+        params = {"offset": 0, "page_size": page_size}
+
+        first = self.api_get(path, params, env=run_env)
+        if not first.get("ok"):
+            raise FeishuError(
+                "v3 records read failed at offset 0: "
+                + json.dumps(first.get("error"), ensure_ascii=False)[:300])
+        rows = self.decode_v3_page(first["data"])
+        has_more = bool(first["data"].get("has_more"))
+        offset = page_size
+        pages = 1
+
+        with ThreadPoolExecutor(max_workers=concurrency) as pool:
+            while has_more and pages < max_pages:
+                offsets = [offset + i * page_size for i in range(concurrency)]
+                futures = {
+                    pool.submit(self.api_get, path,
+                                {"offset": o, "page_size": page_size},
+                                env=run_env): o
+                    for o in offsets
+                }
+                fetched: list[tuple[int, dict]] = []
+                for future in as_completed(futures):
+                    payload = future.result()
+                    if payload.get("ok"):
+                        fetched.append((futures[future], payload["data"]))
+                if not fetched:
+                    break
+                fetched.sort(key=lambda item: item[0])
+                for _, data in fetched:
+                    rows.extend(self.decode_v3_page(data))
+                has_more = bool(fetched[-1][1].get("has_more"))
+                offset = fetched[-1][0] + page_size
+                pages += len(fetched)
+
+        seen: set[str] = set()
+        unique: list[dict] = []
+        for row in rows:
+            record_id = row.get("record_id")
+            if record_id and record_id in seen:
+                continue
+            if record_id:
+                seen.add(record_id)
+            unique.append(row)
+        return unique
+
+    @staticmethod
+    def compare_field(rows: list[dict], field: str,
+                      expected: dict[str, str], *,
+                      filter_field: str | None = None,
+                      filter_value: str | None = None) -> dict:
+        """Compare one remote field against ``{record_id: expected_value}``."""
+        selected = rows
+        if filter_field is not None:
+            selected = [
+                row for row in rows
+                if FeishuBase.one_value(row.get(filter_field)) == filter_value
+            ]
+        present = {row.get("record_id") for row in selected}
+        checked = mismatch = 0
+        examples: list[dict] = []
+        for row in selected:
+            record_id = row.get("record_id")
+            if record_id not in expected:
+                continue
+            checked += 1
+            actual = FeishuBase.one_value(row.get(field))
+            wanted = expected[record_id]
+            if actual is None or str(actual).strip() != str(wanted).strip():
+                mismatch += 1
+                if len(examples) < 5:
+                    examples.append({"record_id": record_id,
+                                     "expected": wanted, "actual": actual})
+        return {
+            "total": len(selected),
+            "checked": checked,
+            "mismatch": mismatch,
+            "missing": sum(1 for rid in expected if rid not in present),
+            "examples": examples,
+        }
+
+    def verify_field(self, table_id: str, field: str,
+                     expected: dict[str, str], *,
+                     filter_field: str | None = None,
+                     filter_value: str | None = None,
+                     **read_kwargs) -> dict:
+        """Fetch all records then compare ``field`` to the expected mapping."""
+        rows = self.list_records_v3(table_id, **read_kwargs)
+        return self.compare_field(rows, field, expected,
+                                  filter_field=filter_field,
+                                  filter_value=filter_value)
 
     def _write_batches(self, table_id: str, command: str, payload_key: str,
                        chunker) -> int:

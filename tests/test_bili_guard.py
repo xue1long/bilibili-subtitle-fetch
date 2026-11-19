@@ -9,11 +9,16 @@ sys.path.insert(0, str(Path(__file__).parents[1] / "scripts"))
 
 from bili_guard import (  # noqa: E402
     CircuitBreaker,
+    CoverStatus,
     FailureKind,
+    FetchPolicy,
     RateLimiter,
     classify_failure,
+    classify_view_response,
     check_login_state,
+    fetch_covers,
     install_subtitle_probe,
+    normalize_cover_url,
     read_subtitle_probe,
 )
 
@@ -247,6 +252,103 @@ class BiliGuardTest(unittest.TestCase):
                     patch("subtitle_extractor.time.sleep"):
                 self.assertIsNone(extractor.extract_single("BVTEST123"))
             self.assertEqual(once.call_count, 2)
+
+
+class CoverFetchPolicyTest(unittest.TestCase):
+    def test_protocol_relative_and_http_covers_become_https(self):
+        self.assertEqual(normalize_cover_url("//i0.hdslb.com/a.jpg"),
+                         "https://i0.hdslb.com/a.jpg")
+        self.assertEqual(normalize_cover_url("http://i1.hdslb.com/b.jpg"),
+                         "https://i1.hdslb.com/b.jpg")
+        self.assertEqual(normalize_cover_url("https://i2.hdslb.com/c.jpg"),
+                         "https://i2.hdslb.com/c.jpg")
+        self.assertEqual(normalize_cover_url(""), "")
+
+    def test_http_rate_limit_statuses_are_retryable(self):
+        for status in (403, 412, 429):
+            kind, _ = classify_view_response(status, None)
+            self.assertEqual(kind, CoverStatus.RATE_LIMITED)
+
+    def test_source_side_permanent_codes_are_not_retryable(self):
+        for code in (62002, 62012, -404):
+            kind, _ = classify_view_response(200, {"code": code})
+            self.assertEqual(kind, CoverStatus.PERMANENT)
+
+    def test_successful_response_yields_normalized_evidence(self):
+        kind, evidence = classify_view_response(200, {
+            "code": 0,
+            "data": {
+                "pic": "//i0.hdslb.com/bfs/archive/x.jpg",
+                "title": "标题",
+                "owner": {"name": "UP"},
+                "duration": 120,
+                "stat": {"view": 42},
+            },
+        })
+        self.assertEqual(kind, CoverStatus.OK)
+        self.assertEqual(evidence["cover"],
+                         "https://i0.hdslb.com/bfs/archive/x.jpg")
+        self.assertEqual(evidence["upzhu"], "UP")
+        self.assertEqual(evidence["view"], 42)
+
+    def test_network_error_is_a_plain_failure(self):
+        kind, _ = classify_view_response(None, None, RuntimeError("timeout"))
+        self.assertEqual(kind, CoverStatus.FAIL)
+
+    def test_retry_gap_grows_each_round(self):
+        policy = FetchPolicy(retry_base_gap=0.8, retry_step=0.6)
+        self.assertAlmostEqual(policy.retry_gap(1), 1.4)
+        self.assertAlmostEqual(policy.retry_gap(2), 2.0)
+
+    def test_fetch_covers_retries_only_rate_limited_rows(self):
+        attempts = {}
+
+        def fetch(record):
+            key = record["bvid"]
+            attempts[key] = attempts.get(key, 0) + 1
+            if key == "BV_RL" and attempts[key] == 1:
+                return 429, None, None
+            if key == "BV_GONE":
+                return 200, {"code": 62002}, None
+            return 200, {"code": 0, "data": {"pic": "//i0.hdslb.com/" + key}}, None
+
+        policy = FetchPolicy(concurrency=4, batch_gap=0,
+                             retry_concurrency=2, retry_base_gap=0,
+                             retry_step=0, max_rounds=2, sleeper=lambda _: None)
+        result = fetch_covers(
+            [{"bvid": "BV_A"}, {"bvid": "BV_RL"}, {"bvid": "BV_GONE"}],
+            fetch, policy=policy)
+        self.assertEqual(len(result["records"]), 2)
+        self.assertEqual(attempts["BV_RL"], 2)
+        self.assertEqual(result["stats"]["rate_limited"], 1)
+        self.assertEqual(result["stats"]["ok"], 2)
+        self.assertEqual(result["pending"], [])
+
+    def test_fetch_covers_keeps_permanent_and_pending_separate(self):
+        calls = []
+
+        def fetch(record):
+            calls.append(record["bvid"])
+            if record["bvid"] == "BV_GONE":
+                return 200, {"code": 62002}, None
+            return 429, None, None
+
+        policy = FetchPolicy(concurrency=3, batch_gap=0,
+                             retry_concurrency=2, retry_base_gap=0,
+                             retry_step=0, max_rounds=1, sleeper=lambda _: None)
+        result = fetch_covers(
+            [{"bvid": "BV_GONE"}, {"bvid": "BV_RL1"}, {"bvid": "BV_RL2"}],
+            fetch, policy=policy)
+        self.assertEqual([r["bvid"] for r in result["permanent"]], ["BV_GONE"])
+        self.assertEqual(len(result["pending"]), 2)
+        self.assertEqual(result["stats"]["permanent"], 1)
+        self.assertNotIn("BV_GONE", calls[3:])
+
+    def test_fetch_policy_rejects_invalid_values(self):
+        with self.assertRaises(ValueError):
+            FetchPolicy(concurrency=0)
+        with self.assertRaises(ValueError):
+            FetchPolicy(batch_gap=-1)
 
 
 if __name__ == "__main__":

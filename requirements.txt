@@ -11,3 +11,6 @@ yt-dlp
 faster-whisper
 # 测试 (AGENT.md: pytest -q)
 pytest
+
+# 封面拼图（scripts/contact_sheet.py，看图摘要流程）
+Pillow>=10
